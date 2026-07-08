@@ -1,5 +1,5 @@
 #include "game/Game.hpp"
-
+#include "common/GameConfig.hpp"
 #include "pieces/Queen.hpp"
 
 namespace kungfu {
@@ -23,6 +23,126 @@ bool Game::isRunning() const {
 bool Game::isFinished() const {
     return state_ == GameState::Finished;
 }
+std::string Game::getPieceToken(const PiecePtr& piece) const {
+    if (!piece) return ".";
+    std::string token = (piece->color() == PlayerColor::White) ? "w" : "b";
+    switch (piece->type()) {
+        case PieceType::King:   token += "K"; break;
+        case PieceType::Queen:  token += "Q"; break;
+        case PieceType::Rook:   token += "R"; break;
+        case PieceType::Bishop: token += "B"; break;
+        case PieceType::Knight: token += "N"; break;
+        case PieceType::Pawn:   token += "P"; break;
+    }
+    return token;
+}
+
+// מימוש פקודת click x y
+void Game::click(int x, int y) {
+    if (state_ != GameState::Running || pendingMove_.has_value()) {
+        return;
+    }
+
+    // המרת פיקסלים לתאי לוח (כל תא 100x100)
+    Position pos{y / 100, x / 100};
+
+    // התעלמות מלחיצה מחוץ לגבולות הלוח
+    auto concreteBoard = std::dynamic_pointer_cast<Board>(board_);
+    int maxRows = concreteBoard ? concreteBoard->rows() : GameConfig::kBoardSize;
+    int maxCols = concreteBoard ? concreteBoard->cols() : GameConfig::kBoardSize;
+    if (!movementSystem_.isInBounds(pos, maxRows, maxCols)) {
+        return;
+    }
+
+    auto piece = board_->pieceAt(pos);
+
+    // אם אין כלי מסומן כרגע
+    if (!selectedPosition_.has_value()) {
+        if (piece.has_value()) {
+            selectedPosition_ = pos; // בחירת הכלי
+        }
+        return;
+    }
+
+    // לחיצה על אותו תא מסומן (תומך בקפיצות לשלבים הבאים)
+    if (pos == *selectedPosition_) {
+        tryJump(pos);
+        selectedPosition_.reset();
+        return;
+    }
+
+    // אם כבר יש כלי מסומן, ולחצנו על תא עם כלי אחר
+    if (piece.has_value()) {
+        auto selectedPiece = board_->pieceAt(*selectedPosition_);
+        if (selectedPiece.has_value() && selectedPiece.value()->color() == piece.value()->color()) {
+            // לחיצה על כלי ידידותי אחר -> מחליפה את הסימון
+            selectedPosition_ = pos;
+            return;
+        }
+    }
+
+    // ניסיון לשלוח בקשת תנועה (זמן ההגעה מחושב לפי מרחק הצעדים - 1000 מילישניות לכל תא)
+    if (ruleEngine_->isValidMove(*selectedPosition_, pos)) {
+        int rowDelta = std::abs(pos.row() - selectedPosition_->row());
+        int colDelta = std::abs(pos.col() - selectedPosition_->col());
+        int distance = std::max(rowDelta, colDelta); // מרחק צעדים
+
+        pendingMove_ = PendingMove{*selectedPosition_, pos, currentTimeMs_ + (distance * 1000)};
+
+        // סימון הכלי כנמצא בתנועה (נועל אותו מפקודות נוספות)
+        auto movingPiece = board_->pieceAt(*selectedPosition_);
+        if (movingPiece.has_value()) {
+            movingPiece.value()->setState(PieceState::Moving);
+        }
+
+        selectedPosition_.reset();
+    }
+}
+
+// מימוש פקודת wait ms
+void Game::wait(int ms) {
+    if (state_ != GameState::Running) {
+        return;
+    }
+    currentTimeMs_ += ms;
+
+    // בדיקה האם הגיע זמן פתרון התנועה המושהית
+    if (pendingMove_.has_value() && currentTimeMs_ >= pendingMove_->arrivalTimeMs) {
+        Position from = pendingMove_->from;
+        Position to = pendingMove_->to;
+        pendingMove_.reset();
+
+        // החזרת מצב הכלי ל-Idle כדי שיוכל לזוז שוב
+        auto movingPiece = board_->pieceAt(from);
+        if (movingPiece.has_value()) {
+            movingPiece.value()->setState(PieceState::Idle);
+        }
+
+        tryMove(from, to); // ביצוע התנועה בפועל באופן מיידי
+    }
+}
+
+// מימוש פקודת print board
+void Game::printBoard(std::ostream& out) const {
+    auto concreteBoard = std::dynamic_pointer_cast<Board>(board_);
+    int maxRows = concreteBoard ? concreteBoard->rows() : GameConfig::kBoardSize;
+    int maxCols = concreteBoard ? concreteBoard->cols() : GameConfig::kBoardSize;
+
+    for (int r = 0; r < maxRows; ++r) {
+        for (int c = 0; c < maxCols; ++c) {
+            auto piece = board_->pieceAt(Position(r, c));
+            if (piece.has_value()) {
+                out << getPieceToken(piece.value());
+            } else {
+                out << ".";
+            }
+            if (c + 1 < maxCols) {
+                out << " ";
+            }
+        }
+        out << "\n";
+    }
+}
 
 bool Game::tryMove(const Position& from, const Position& to) {
     if (state_ != GameState::Running) {
@@ -41,6 +161,17 @@ bool Game::tryMove(const Position& from, const Position& to) {
 
     if (collisionSystem_->isFriendlyBlock(from, to)) {
         return false;
+    }
+
+    // --- עדכון עבור כלים מחליקים (מלכה, צריח, רץ) ---
+    // ודואים שהנתיב שלהם פנוי מכלים אחרים (פרש ומלך פטורים מבדיקה זו)
+    if (sourcePiece.has_value()) {
+        PieceType type = sourcePiece.value()->type();
+        if (type == PieceType::Queen || type == PieceType::Rook || type == PieceType::Bishop) {
+            if (!collisionSystem_->isPathClear(from, to)) {
+                return false; // הנתיב חסום על ידי כלי אחר
+            }
+        }
     }
 
     // For a double-step pawn move, the intermediate square must be empty.

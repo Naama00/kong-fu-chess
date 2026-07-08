@@ -1,10 +1,12 @@
 #include "board/Board.hpp"
-
 #include <algorithm>
 
 namespace kungfu {
 
-Board::Board() = default;
+Board::Board() : rows_(8), cols_(8) {}
+
+Board::Board(int rows, int cols) : rows_(rows), cols_(cols) {}
+
 
 std::optional<PiecePtr> Board::pieceAt(const Position& position) const {
     for (const auto& piece : pieces_) {
@@ -43,19 +45,23 @@ bool Board::removePiece(const Position& position) {
 }
 
 bool Board::movePiece(const Position& from, const Position& to) {
-    auto it = std::find_if(pieces_.begin(), pieces_.end(), [&](const PiecePtr& piece) {
-        return piece && piece->position() == from;
-    });
+    PiecePtr movingPiece = nullptr;
+    for (auto& piece : pieces_) {
+        if (piece && piece->position() == from) {
+            movingPiece = piece;
+            break;
+        }
+    }
 
-    if (it == pieces_.end()) {
+    if (!movingPiece) {
         return false;
     }
 
     if (pieceAt(to).has_value()) {
-        removePiece(to);
+        removePiece(to); // הסרת הכלי הנאכל בטוחה כעת
     }
 
-    (*it)->setPosition(to);
+    movingPiece->setPosition(to);
     return true;
 }
 

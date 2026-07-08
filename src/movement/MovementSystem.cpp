@@ -1,5 +1,4 @@
 #include "movement/MovementSystem.hpp"
-
 #include <cmath>
 #include "common/GameConfig.hpp"
 
@@ -9,6 +8,12 @@ bool MovementSystem::isInBounds(const Position& position) const {
     return position.row() >= 0 && position.row() < GameConfig::kBoardSize &&
            position.col() >= 0 && position.col() < GameConfig::kBoardSize;
 }
+
+bool MovementSystem::isInBounds(const Position& position, int rows, int cols) const {
+    return position.row() >= 0 && position.row() < rows &&
+           position.col() >= 0 && position.col() < cols;
+}
+
 
 bool MovementSystem::isSamePosition(const Position& from, const Position& to) const {
     return from == to;

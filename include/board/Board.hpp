@@ -11,6 +11,10 @@ namespace kungfu {
 class Board : public IBoard {
 public:
     Board();
+    Board(int rows, int cols); // בנאי חדש לתמיכה בממדים דינמיים
+
+    int rows() const { return rows_; }
+    int cols() const { return cols_; }
 
     std::optional<PiecePtr> pieceAt(const Position& position) const override;
     bool placePiece(const PiecePtr& piece, const Position& position) override;
@@ -22,6 +26,8 @@ public:
 
 private:
     std::vector<PiecePtr> pieces_;
+    int rows_ = 8; // ברירת מחדל 8
+    int cols_ = 8; // ברירת מחדל 8
 };
 
 }  // namespace kungfu

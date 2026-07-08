@@ -140,5 +140,62 @@ int main() {
         assert(g.isRunning());
     }
 
+    // --- Pawn cannot capture forward ---
+    {
+        auto board = std::make_shared<kungfu::Board>();
+        auto whitePawn = std::make_shared<kungfu::Pawn>(kungfu::PlayerColor::White, kungfu::Position(1, 0));
+        auto enemyRook = std::make_shared<kungfu::Rook>(kungfu::PlayerColor::Black, kungfu::Position(2, 0));
+        board->placePiece(whitePawn, kungfu::Position(1, 0));
+        board->placePiece(enemyRook, kungfu::Position(2, 0));
+
+        kungfu::Game g(board);
+        g.start();
+        assert(!g.tryMove(kungfu::Position(1, 0), kungfu::Position(2, 0))); // רגלי חסום, אינו יכול לאכול ישר קדימה
+        assert(board->pieceAt(kungfu::Position(1, 0)).has_value());
+        assert(board->pieceAt(kungfu::Position(2, 0)).has_value());
+    }
+
+    // --- Pawn can capture diagonally ---
+    {
+        auto board = std::make_shared<kungfu::Board>();
+        auto whitePawn = std::make_shared<kungfu::Pawn>(kungfu::PlayerColor::White, kungfu::Position(1, 1));
+        auto enemyRook = std::make_shared<kungfu::Rook>(kungfu::PlayerColor::Black, kungfu::Position(2, 2));
+        board->placePiece(whitePawn, kungfu::Position(1, 1));
+        board->placePiece(enemyRook, kungfu::Position(2, 2));
+
+        kungfu::Game g(board);
+        g.start();
+        assert(g.tryMove(kungfu::Position(1, 1), kungfu::Position(2, 2))); // אכילה באלכסון מאושרת
+        assert(board->pieceAt(kungfu::Position(2, 2)).has_value());
+        assert(board->pieceAt(kungfu::Position(2, 2)).value()->type() == kungfu::PieceType::Pawn);
+        assert(!board->pieceAt(kungfu::Position(1, 1)).has_value());
+    }
+
+    // --- Pawn cannot move diagonally to an empty square ---
+    {
+        auto board = std::make_shared<kungfu::Board>();
+        auto whitePawn = std::make_shared<kungfu::Pawn>(kungfu::PlayerColor::White, kungfu::Position(1, 1));
+        board->placePiece(whitePawn, kungfu::Position(1, 1));
+
+        kungfu::Game g(board);
+        g.start();
+        assert(!g.tryMove(kungfu::Position(1, 1), kungfu::Position(2, 2))); // אסור לזוז באלכסון למשבצת ריקה
+        assert(board->pieceAt(kungfu::Position(1, 1)).has_value());
+    }
+
+    // --- Pawn cannot move diagonally to a friendly piece ---
+    {
+        auto board = std::make_shared<kungfu::Board>();
+        auto whitePawn = std::make_shared<kungfu::Pawn>(kungfu::PlayerColor::White, kungfu::Position(1, 1));
+        auto friendlyRook = std::make_shared<kungfu::Rook>(kungfu::PlayerColor::White, kungfu::Position(2, 2));
+        board->placePiece(whitePawn, kungfu::Position(1, 1));
+        board->placePiece(friendlyRook, kungfu::Position(2, 2));
+
+        kungfu::Game g(board);
+        g.start();
+        assert(!g.tryMove(kungfu::Position(1, 1), kungfu::Position(2, 2))); // אסור לאכול כלי ידידותי באלכסון
+        assert(board->pieceAt(kungfu::Position(1, 1)).has_value());
+    }
+
     return 0;
 }
