@@ -16,6 +16,7 @@ public:
     bool placePiece(const PiecePtr& piece, const Position& position) override;
     bool removePiece(const Position& position) override;
     bool movePiece(const Position& from, const Position& to) override;
+    bool replacePiece(const Position& position, const PiecePtr& newPiece) override;
 
     std::vector<PiecePtr> pieces() const;
 

@@ -31,6 +31,9 @@ add_executable(kungfu_tests
     tests/unit/MovementSystemTests.cpp
     tests/unit/CollisionSystemTests.cpp
     tests/unit/GameTests.cpp
+    tests/unit/PawnTests.cpp
+    tests/unit/JumpTests.cpp
+    tests/unit/ConfigAndBoundaryTests.cpp
 )
 target_link_libraries(kungfu_tests PRIVATE kungfu_engine)
 target_include_directories(kungfu_tests PRIVATE include)

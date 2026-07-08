@@ -1,3 +1,5 @@
+// Repository: https://github.com/Naama00/kong-fu-chess.git
+
 #include <cassert>
 #include <memory>
 #include "board/Board.hpp"
@@ -17,6 +19,9 @@ int main() {
 
     assert(collisionPiece.has_value());
     assert(collisionPiece.value() == defender);
+
+    const auto noCollision = collision.findCollision(kungfu::Position(2, 2), kungfu::Position(3, 3));
+    assert(!noCollision.has_value());
 
     return 0;
 }

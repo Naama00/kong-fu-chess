@@ -16,4 +16,11 @@ enum class PlayerColor {
     Black
 };
 
+enum class PieceState {
+    Idle,       // On the board, not moving.
+    Moving,     // En route to a destination.
+    Airborne,   // Jumping: stays in place, captures any enemy that arrives.
+    Captured    // Removed from the game.
+};
+
 }  // namespace kungfu

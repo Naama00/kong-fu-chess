@@ -59,6 +59,20 @@ bool Board::movePiece(const Position& from, const Position& to) {
     return true;
 }
 
+bool Board::replacePiece(const Position& position, const PiecePtr& newPiece) {
+    auto it = std::find_if(pieces_.begin(), pieces_.end(), [&](const PiecePtr& p) {
+        return p && p->position() == position;
+    });
+
+    if (it == pieces_.end() || !newPiece) {
+        return false;
+    }
+
+    newPiece->setPosition(position);
+    *it = newPiece;
+    return true;
+}
+
 std::vector<PiecePtr> Board::pieces() const {
     return pieces_;
 }
