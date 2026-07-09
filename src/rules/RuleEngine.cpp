@@ -1,68 +1,56 @@
 #include "rules/RuleEngine.hpp"
-#include "common/GameConfig.hpp"
-#include <cmath>
+#include "rules/PieceRules.hpp"
 
 namespace kungfu {
 
-RuleEngine::RuleEngine(BoardPtr board) : board_(std::move(board)) {}
+RuleEngine::RuleEngine(std::shared_ptr<IBoard> board) noexcept : board_(std::move(board)) {}
 
-bool RuleEngine::isValidMove(const Position& from, const Position& to) const {
+MoveValidation RuleEngine::validateMove(const Position& from, const Position& to) const {
     if (!board_) {
-        return false;
+        return {false, "internal_error"};
     }
 
-    const auto sourcePiece = board_->pieceAt(from);
-    if (!sourcePiece.has_value() || !sourcePiece.value() || !sourcePiece.value()->isMovable()) {
-        return false;
+    int maxRows = board_->rows();
+    int maxCols = board_->cols();
+
+    // 1. בדיקת גבולות לוח
+    auto isOutOfBounds = [maxRows, maxCols](const Position& pos) noexcept {
+        return pos.row() < 0 || pos.row() >= maxRows || pos.col() < 0 || pos.col() >= maxCols;
+    };
+
+    if (isOutOfBounds(from) || isOutOfBounds(to)) {
+        return {false, "outside_board"};
     }
 
-    // --- חוקי תנועה מיוחדים עבור רגלי (Pawn) ---
-    if (sourcePiece.value()->type() == PieceType::Pawn) {
-        const auto targetPiece = board_->pieceAt(to);
-        const int rowDelta = to.row() - from.row();
-        const int colDelta = std::abs(to.col() - from.col());
-        const auto color = sourcePiece.value()->color();
-
-        if (color == PlayerColor::White) {
-            // תנועה ישרה קדימה - אסור לאכול קדימה!
-            if (colDelta == 0) {
-                if (targetPiece.has_value()) {
-                    return false; // הדרך חסומה, רגלי לא יכול לנוע או לאכול ישר קדימה
-                }
-                const bool oneStep = (rowDelta == 1);
-                const bool twoStep = (from.row() == GameConfig::kWhitePawnStartRow && rowDelta == 2);
-                return oneStep || twoStep;
-            }
-            // אכילה באלכסון - חייב להיות כלי עוין ביעד כדי לאפשר את המהלך
-            if (colDelta == 1 && rowDelta == 1) {
-                return targetPiece.has_value() && targetPiece.value()->color() != color;
-            }
-        } else {
-            // תנועה ישרה קדימה - אסור לאכול קדימה!
-            if (colDelta == 0) {
-                if (targetPiece.has_value()) {
-                    return false; // הדרך חסומה, רגלי לא יכול לנוע או לאכול ישר קדימה
-                }
-                const bool oneStep = (rowDelta == -1);
-                const bool twoStep = (from.row() == GameConfig::kBlackPawnStartRow && rowDelta == -2);
-                return oneStep || twoStep;
-            }
-            // אכילה באלכסון - חייב להיות כלי עוין ביעד כדי לאפשר את המהלך
-            if (colDelta == 1 && rowDelta == -1) {
-                return targetPiece.has_value() && targetPiece.value()->color() != color;
-            }
-        }
-        return false; // כל תנועה אחרת של רגלי אינה חוקית
+    // 2. בדיקה שיש כלי במיקום המוצא
+    auto sourcePieceOpt = board_->pieceAt(from);
+    if (!sourcePieceOpt.has_value() || !sourcePieceOpt.value()) {
+        return {false, "empty_source"};
     }
 
-    // עבור שאר הכלים (מלך, מלכה, צריח, רץ ופרש) - נשענים על הגיאומטריה הרגילה
-    return movementSystem_.isValidMove(*sourcePiece.value(), from, to);
-}
+    auto piece = sourcePieceOpt.value();
 
-bool RuleEngine::isPawnPromotion(const Position& to, PlayerColor color) const {
-    return color == PlayerColor::White
-               ? to.row() == GameConfig::kWhitePawnPromotionRow
-               : to.row() == GameConfig::kBlackPawnPromotionRow;
+    // 3. מניעת תנועה לאותה משבצת בדיוק
+    if (from == to) {
+        return {false, "illegal_piece_move"};
+    }
+
+    // 4. מניעת פגיעה בכלי ידידותי ביעד
+    auto targetPieceOpt = board_->pieceAt(to);
+    if (targetPieceOpt.has_value() && targetPieceOpt.value()->color() == piece->color()) {
+        return {false, "friendly_destination"};
+    }
+
+    // 5. שאילתת חוקיות גיאומטרית מול ה-Strategy המתאים
+    const auto& rule = PieceRuleFactory::getRule(piece->type());
+    auto legalDestinations = rule.getLegalDestinations(*board_, *piece);
+
+    auto it = std::find(legalDestinations.begin(), legalDestinations.end(), to);
+    if (it != legalDestinations.end()) {
+        return {true, "ok"};
+    }
+
+    return {false, "illegal_piece_move"};
 }
 
 }  // namespace kungfu

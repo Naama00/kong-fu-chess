@@ -3,23 +3,23 @@
 #include <memory>
 #include "board/IBoard.hpp"
 #include "common/Position.hpp"
-#include "movement/MovementSystem.hpp"
-#include "rules/IRuleEngine.hpp"
 
 namespace kungfu {
 
-class RuleEngine : public IRuleEngine {
-public:
-    explicit RuleEngine(BoardPtr board);
-
-    bool isValidMove(const Position& from, const Position& to) const override;
-    bool isPawnPromotion(const Position& to, PlayerColor color) const override;
-
-private:
-    BoardPtr board_;
-    MovementSystem movementSystem_;
+struct MoveValidation {
+    bool isValid;
+    std::string reason;
 };
 
-using RuleEnginePtr = std::shared_ptr<RuleEngine>;
+class RuleEngine {
+public:
+    explicit RuleEngine(std::shared_ptr<IBoard> board) noexcept;
+
+    // בודק חוקיות מלאה של מהלך עבור הלוח הנוכחי ומחזיר שגיאות מובנות
+    MoveValidation validateMove(const Position& from, const Position& to) const;
+
+private:
+    std::shared_ptr<IBoard> board_;
+};
 
 }  // namespace kungfu

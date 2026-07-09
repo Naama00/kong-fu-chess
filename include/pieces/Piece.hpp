@@ -11,15 +11,13 @@ public:
     Piece(PieceType type, PlayerColor color, Position position);
     virtual ~Piece() = default;
 
-    PieceType type() const;
-    PlayerColor color() const;
-    Position position() const;
-    PieceState state() const;
+    PieceType type() const { return type_; }
+    PlayerColor color() const { return color_; }
+    Position position() const { return position_; }
+    PieceState state() const { return state_; }
 
-    void setPosition(const Position& position);
-    void setState(PieceState state);
-
-    bool isAirborne() const;
+    void setPosition(const Position& position) { position_ = position; }
+    void setState(PieceState state) { state_ = state; }
 
     virtual bool isMovable() const = 0;
 

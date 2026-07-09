@@ -30,16 +30,10 @@ public:
     void stop();
     bool isRunning() const;
     bool isFinished() const;
-
-    // תנועה מיידית (עבור מנוע הליבה ובדיקות יחידה)
     bool tryMove(const Position& from, const Position& to);
-
-    // --- דרישות שלב ב' (Iteration 2) ---
     void click(int x, int y);
     void wait(int ms);
     void printBoard(std::ostream& out) const;
-
-    // --- דרישות שלב ג' והלאה (Airborne / Jumps) ---
     bool tryJump(const Position& cell);
     void resolveJump(const Position& cell);
     bool handleArrivalAtAirbornCell(const Position& cell, const Position& arrivingFrom);
@@ -53,7 +47,6 @@ private:
     std::shared_ptr<CollisionSystem> collisionSystem_;
     MovementSystem movementSystem_;
 
-    // משתני ניהול זמן וממשק אינטראקטיבי
     std::optional<Position> selectedPosition_;
     std::optional<PendingMove> pendingMove_;
     int currentTimeMs_ = 0;

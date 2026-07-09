@@ -17,10 +17,9 @@ enum class PlayerColor {
 };
 
 enum class PieceState {
-    Idle,       // On the board, not moving.
-    Moving,     // En route to a destination.
-    Airborne,   // Jumping: stays in place, captures any enemy that arrives.
-    Captured    // Removed from the game.
+    Idle,       // על הלוח, אינו בתנועה
+    Moving,     // נמצא בדרך ליעד (מנוהל בשכבת זמן אמת)
+    Captured    // הוסר מהמשחק
 };
 
 }  // namespace kungfu
