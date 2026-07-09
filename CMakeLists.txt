@@ -15,25 +15,24 @@ add_library(kungfu_engine
     src/pieces/Knight.cpp
     src/pieces/Pawn.cpp
     src/board/Board.cpp
-    src/movement/MovementSystem.cpp
-    src/collision/CollisionSystem.cpp
+    src/io/BoardParser.cpp
+    src/io/BoardPrinter.cpp
+    src/input/BoardMapper.cpp
+    src/input/Controller.cpp
+    src/rules/PieceRules.cpp
     src/rules/RuleEngine.cpp
-    src/game/Game.cpp
+    src/realtime/Motion.cpp
+    src/realtime/RealTimeArbiter.cpp
+    src/engine/GameEngine.cpp
 )
 target_include_directories(kungfu_engine PUBLIC include)
 
 add_executable(kungfu_tests
-    tests/unit/PositionTests.cpp
-    tests/unit/PieceTests.cpp
-    tests/unit/BoardTests.cpp
+    tests/unit/ModelTests.cpp
+    tests/unit/ControllerAndMapperTests.cpp
     tests/unit/RuleEngineTests.cpp
-    tests/unit/PieceTypesTests.cpp
-    tests/unit/MovementSystemTests.cpp
-    tests/unit/CollisionSystemTests.cpp
-    tests/unit/GameTests.cpp
-    tests/unit/PawnTests.cpp
-    tests/unit/JumpTests.cpp
-    tests/unit/ConfigAndBoundaryTests.cpp
+    tests/unit/GameEngineAndRealTimeTests.cpp
+    tests/integration/SimpleFlowTests.cpp
 )
 target_link_libraries(kungfu_tests PRIVATE kungfu_engine)
 target_include_directories(kungfu_tests PRIVATE include)

@@ -18,10 +18,15 @@ CPP_ORDER = [
     "src/pieces/Knight.cpp",
     "src/pieces/Pawn.cpp",
     "src/board/Board.cpp",
-    "src/movement/MovementSystem.cpp",
-    "src/collision/CollisionSystem.cpp",
+    "src/io/BoardParser.cpp",
+    "src/io/BoardPrinter.cpp",
+    "src/input/BoardMapper.cpp",
+    "src/input/Controller.cpp",
+    "src/rules/PieceRules.cpp",
     "src/rules/RuleEngine.cpp",
-    "src/game/Game.cpp"
+    "src/realtime/Motion.cpp",
+    "src/realtime/RealTimeArbiter.cpp",
+    "src/engine/GameEngine.cpp"
 ]
 
 # קוד ה-Driver האינטראקטיבי שיוזרק בסוף הקובץ המאוחד
@@ -32,201 +37,123 @@ DRIVER_CODE = """
 
 namespace {
 
-bool is_valid_piece_token(const std::string& token) {
-    static const std::vector<std::string> valid = {
-        ".", "wK", "wQ", "wR", "wB", "wN", "wP",
-        "bK", "bQ", "bR", "bB", "bN", "bP"
-    };
-    return std::find(valid.begin(), valid.end(), token) != valid.end();
-}
-
-std::vector<std::string> split_ws(const std::string& text) {
-    std::istringstream ss(text);
-    std::vector<std::string> tokens;
-    std::string token;
-    while (ss >> token) {
-        tokens.push_back(token);
+// פונקציית עזר להסרת רווחים מקצוות שורה
+std::string trim(const std::string& str) {
+    auto first = std::find_if_not(str.begin(), str.end(), [](unsigned char ch) {
+        return std::isspace(ch);
+    });
+    if (first == str.end()) {
+        return "";
     }
-    return tokens;
+    auto last = std::find_if_not(str.rbegin(), str.rend(), [](unsigned char ch) {
+        return std::isspace(ch);
+    }).base();
+    return std::string(first, last);
 }
-
-kungfu::PiecePtr createPieceFromToken(const std::string& token, const kungfu::Position& pos) {
-    if (token == "." || token.size() < 2) return nullptr;
-    kungfu::PlayerColor color = (token[0] == 'w') ? kungfu::PlayerColor::White : kungfu::PlayerColor::Black;
-    char type = token[1];
-    switch (type) {
-        case 'K': return std::make_shared<kungfu::King>(color, pos);
-        case 'Q': return std::make_shared<kungfu::Queen>(color, pos);
-        case 'R': return std::make_shared<kungfu::Rook>(color, pos);
-        case 'B': return std::make_shared<kungfu::Bishop>(color, pos);
-        case 'N': return std::make_shared<kungfu::Knight>(color, pos);
-        case 'P': return std::make_shared<kungfu::Pawn>(color, pos);
-        default: return nullptr;
-    }
-}
-
-struct ActiveJump {
-    kungfu::Position cell;
-    int landTimeMs;
-};
 
 } // namespace
 
 int main() {
-    std::vector<std::string> all_lines;
+    // הגדרת תמיכה באופטימיזציה של מהירות קלט/פלט במידת הצורך
+    std::ios_base::sync_with_stdio(false);
+    std::cin.tie(nullptr);
+
+    std::vector<std::string> allLines;
     std::string line;
-    bool has_sections = false;
+    bool hasSections = false;
 
-    // קריאת כל קלט השורות
+    // קריאת קלט מלא משורת הפקודה / קובץ בדיקה
     while (std::getline(std::cin, line)) {
-        std::string trimmed = line;
-        trimmed.erase(trimmed.begin(), std::find_if(trimmed.begin(), trimmed.end(), [](unsigned char ch) {
-            return !std::isspace(ch);
-        }));
-        trimmed.erase(std::find_if(trimmed.rbegin(), trimmed.rend(), [](unsigned char ch) {
-            return !std::isspace(ch);
-        }).base(), trimmed.end());
-
+        std::string trimmed = trim(line);
         if (trimmed == "Board:" || trimmed == "Commands:") {
-            has_sections = true;
+            hasSections = true;
         }
-        all_lines.push_back(trimmed);
+        allLines.push_back(trimmed);
     }
 
-    if (!has_sections) {
-        // --- תרחיש א': שלב א' בלבד (לוח בלבד ללא פקודות) ---
-        std::vector<std::vector<std::string>> parsed_board;
-        bool valid = true;
-        size_t col_count = 0;
-
-        for (const auto& row_line : all_lines) {
-            std::vector<std::string> tokens = split_ws(row_line);
-            if (tokens.empty()) {
-                continue;
+    // --- תרחיש א': שלב א' בלבד (קלט לוח ישיר ללא הגדרת פקודות) ---
+    if (!hasSections) {
+        std::string boardRaw;
+        for (const auto& l : allLines) {
+            if (!l.empty()) {
+                boardRaw += l + "\n";
             }
-
-            if (parsed_board.empty()) {
-                col_count = tokens.size();
-                if (col_count == 0) {
-                    valid = false;
-                }
-            } else {
-                if (tokens.size() != col_count) {
-                    valid = false;
-                }
-            }
-
-            for (const auto& token : tokens) {
-                if (!is_valid_piece_token(token)) {
-                    valid = false;
-                }
-            }
-            parsed_board.push_back(tokens);
         }
 
-        if (parsed_board.empty() || !valid) {
-            std::cout << "Invalid board" << std::endl;
+        auto board = kungfu::BoardParser::parse(boardRaw);
+        if (!board) {
+            std::cout << "Invalid board\n";
             return 1;
         }
 
-        size_t rows = parsed_board.size();
-        size_t cols = col_count;
-        for (size_t r = 0; r < rows; ++r) {
-            for (size_t c = 0; c < cols; ++c) {
-                std::cout << parsed_board[r][c] << (c + 1 < cols ? " " : "");
-            }
-            std::cout << "\\n";
-        }
+        // הדפסת הלוח הלוגי כפי שהתפרסר
+        std::cout << kungfu::BoardPrinter::print(*board);
         return 0;
     }
 
-    // --- תרחיש ב': משחק מלא עם כותרות ופקודות ---
-    std::vector<std::vector<std::string>> board_grid;
-    std::vector<std::string> command_lines;
-    bool reading_board = false;
-    bool reading_commands = false;
+    // --- תרחיש ב': משחק מלא עם כותרות "Board:" ו-"Commands:" ---
+    std::string boardSection;
+    std::vector<std::string> commandLines;
+    bool readingBoard = false;
+    bool readingCommands = false;
 
-    for (const auto& trimmed : all_lines) {
-        if (trimmed.empty()) {
+    for (const auto& l : allLines) {
+        if (l.empty()) {
             continue;
         }
-        if (trimmed == "Board:") {
-            reading_board = true;
-            reading_commands = false;
+        if (l == "Board:") {
+            readingBoard = true;
+            readingCommands = false;
             continue;
         }
-        if (trimmed == "Commands:") {
-            reading_board = false;
-            reading_commands = true;
+        if (l == "Commands:") {
+            readingBoard = false;
+            readingCommands = true;
             continue;
         }
-        if (reading_board) {
-            board_grid.push_back(split_ws(trimmed));
-        } else if (reading_commands) {
-            command_lines.push_back(trimmed);
+
+        if (readingBoard) {
+            boardSection += l + "\n";
+        } else if (readingCommands) {
+            commandLines.push_back(l);
         }
     }
 
-    // יצירת לוח מודולרי מהמחלקה האמיתית שלך בממדים שהוסקו דינמית
-    int rows = board_grid.size();
-    int cols = (rows > 0) ? board_grid[0].size() : 0;
-    auto board = std::make_shared<kungfu::Board>(rows, cols);
-
-    for (int r = 0; r < rows; ++r) {
-        for (int c = 0; c < cols; ++c) {
-            auto piece = createPieceFromToken(board_grid[r][c], kungfu::Position(r, c));
-            if (piece) {
-                board->placePiece(piece, kungfu::Position(r, c));
-            }
-        }
+    // 1. יצירת הלוח
+    auto board = kungfu::BoardParser::parse(boardSection);
+    if (!board) {
+        std::cout << "Invalid board\n";
+        return 1;
     }
 
-    // הרצת המשחק
-    kungfu::Game game(board);
-    game.start();
+    // 2. אתחול מנוע החוקים, מנוע המשחק והבקר (Controller)
+    auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
+    auto gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine);
+    kungfu::Controller controller(gameEngine, 100); // 100 pixels per cell
 
-    int currentTimeMs = 0;
-    std::vector<ActiveJump> activeJumps;
+    // 3. עיבוד שורות פקודה
+    for (const auto& cmd : commandLines) {
+        std::istringstream stream(cmd);
+        std::string action;
+        stream >> action;
 
-    for (const std::string& command : command_lines) {
-        std::istringstream ss(command);
-        std::string verb;
-        ss >> verb;
-        if (verb == "click") {
+        if (action == "click") {
             int x = 0;
             int y = 0;
-            ss >> x >> y;
-            game.click(x, y);
-        } else if (verb == "jump") {
-            int x = 0;
-            int y = 0;
-            ss >> x >> y;
-            kungfu::Position pos{y / 100, x / 100};
-            if (game.tryJump(pos)) {
-                activeJumps.push_back(ActiveJump{pos, currentTimeMs + 1000});
+            if (stream >> x >> y) {
+                controller.click(x, y);
             }
-        } else if (verb == "wait") {
+        } 
+        else if (action == "wait") {
             int ms = 0;
-            ss >> ms;
-            currentTimeMs += ms;
-            
-            // הרצת שעון המשחק ופתרון תנועות רגילות
-            game.wait(ms);
-            
-            // פתרון קפיצות שהגיע זמן נחיתתן (1,000 מילישניות מתחילת הקפיצה)
-            for (auto it = activeJumps.begin(); it != activeJumps.end(); ) {
-                if (currentTimeMs >= it->landTimeMs) {
-                    game.resolveJump(it->cell);
-                    it = activeJumps.erase(it); // הסרה בטוחה מתוך לולאה
-                } else {
-                    ++it;
-                }
+            if (stream >> ms) {
+                gameEngine->wait(ms);
             }
-        } else if (verb == "print") {
+        } 
+        else if (action == "print") {
             std::string target;
-            ss >> target;
-            if (target == "board") {
-                game.printBoard(std::cout);
+            if (stream >> target && target == "board") {
+                std::cout << kungfu::BoardPrinter::print(*board);
             }
         }
     }
