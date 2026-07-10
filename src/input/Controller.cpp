@@ -15,27 +15,31 @@ ControllerResult Controller::click(int x, int y) {
     int cols = engine_->getBoardCols();
     auto cellOpt = mapper_.pixelToCell(x, y, rows, cols);
 
-    // 1. קליק מחוץ לגבולות הלוח
+    // 1. קליק מחוץ לגבולות הלוח - התעלמות מוחלטת (אינו מבטל סימון קיים)
     if (!cellOpt.has_value()) {
-        if (selectedPosition_.has_value()) {
-            // אם יש כלי מסומן, קליק מחוץ ללוח מבטל את הסימון
-            clearSelection();
-            return {true, "Selection cancelled (clicked outside board)"};
-        }
-        // אם אין כלי מסומן, קליק מחוץ ללוח פשוט מיועד להתעלמות
         return {false, "Click outside board ignored"};
     }
 
     Position targetCell = cellOpt.value();
 
-    // 2. קליק בתוך הלוח כאשר כבר קיים כלי מסומן (קליק שני)
+    // 2. קליק בתוך הלוח כאשר כבר קיים כלי מסומן
     if (selectedPosition_.has_value()) {
         Position from = selectedPosition_.value();
         
-        // שליחת בקשת התנועה למנוע המשחק
+        // חוק מיוחד: אם משבצת היעד מכילה כלי ידידותי, מחליפים את הסימון אליו
+        if (engine_->hasPieceAt(targetCell)) {
+            auto fromColor = engine_->getPieceColorAt(from);
+            auto targetColor = engine_->getPieceColorAt(targetCell);
+            if (fromColor.has_value() && targetColor.has_value() && fromColor.value() == targetColor.value()) {
+                selectedPosition_ = targetCell;
+                return {true, "Piece selection replaced"};
+            }
+        }
+        
+        // שליחת בקשת התנועה למנוע המשחק (עבור תא ריק או כלי עוין)
         auto moveResult = engine_->requestMove(from, targetCell);
         
-        // פינוי הסימון באופן מיידי לאחר הניסיון (לפי דרישות המדריך)
+        // פינוי הסימון באופן מיידי לאחר הניסיון
         clearSelection();
 
         if (moveResult.isAccepted) {

@@ -133,7 +133,7 @@ std::vector<Position> KingRule::getLegalDestinations(const IBoard& board, const 
 // --- Pawn (Simplified) ---
 std::vector<Position> PawnRule::getLegalDestinations(const IBoard& board, const Piece& piece) const {
     std::vector<Position> dests;
-    dests.reserve(3);
+    dests.reserve(4); // הקצאה פוטנציאלית ל-4 יעדים (צעד, צעד כפול, 2 אלכסונים)
 
     int currentRow = piece.position().row();
     int currentCol = piece.position().col();
@@ -147,11 +147,26 @@ std::vector<Position> PawnRule::getLegalDestinations(const IBoard& board, const 
     int nextRow = currentRow + direction;
     if (nextRow >= 0 && nextRow < maxRows) {
         Position forward(nextRow, currentCol);
-        if (!board.pieceAt(forward).has_value()) {
+        bool isForwardEmpty = !board.pieceAt(forward).has_value();
+        
+        if (isForwardEmpty) {
             dests.push_back(forward);
         }
 
-        // 2. אכילה באלכסון (רק אם יש שם כלי עוין)
+        // 2. צעד כפול קדימה משורת ההתחלה (רק אם שני התאים קדימה ריקים)
+        int startRow = (piece.color() == PlayerColor::White) ? GameConfig::kWhitePawnStartRow : GameConfig::kBlackPawnStartRow;
+        if (currentRow == startRow) {
+            int doubleRow = currentRow + 2 * direction;
+            if (doubleRow >= 0 && doubleRow < maxRows) {
+                Position doubleForward(doubleRow, currentCol);
+                // בדיקת "נתיב פנוי" - גם משבצת הביניים וגם היעד חייבות להיות ריקות
+                if (isForwardEmpty && !board.pieceAt(doubleForward).has_value()) {
+                    dests.push_back(doubleForward);
+                }
+            }
+        }
+
+        // 3. אכילה באלכסון (רק אם יש שם כלי עוין)
         for (int cOffset : {-1, 1}) {
             int nextCol = currentCol + cOffset;
             if (nextCol >= 0 && nextCol < maxCols) {

@@ -5,32 +5,44 @@
 #include "rules/RuleEngine.hpp"
 #include "realtime/RealTimeArbiter.hpp"
 #include "engine/GameSnapshot.hpp"
+#include <vector>
 
 namespace kungfu {
+
+// מבנה נתונים לייצוג מהלך מראש
+struct PremoveData {
+    Position from;
+    Position to;
+};
 
 class GameEngine : public IGameEngine {
 public:
     GameEngine(std::shared_ptr<IBoard> board, std::shared_ptr<RuleEngine> ruleEngine) noexcept;
-        // מימוש ממשק IGameEngine
+    
     MoveResult requestMove(const Position& from, const Position& to) override;
     bool hasPieceAt(const Position& pos) const override;
     int getBoardRows() const override;
     int getBoardCols() const override;
+    std::optional<PlayerColor> getPieceColorAt(const Position& pos) const override;
 
-    // התקדמות זמן מדומה
     void wait(int ms) noexcept;
     bool isGameOver() const noexcept { return gameOver_; }
     int getCurrentTimeMs() const noexcept { return currentTimeMs_; }
     
-    // מייצר תמונת מצב לקריאה בלבד לטובת הציור
     GameSnapshot getSnapshot(std::optional<Position> selectedCell) const noexcept;
     
 private:
+    // פונקציית עזר להפעלת Premoves שממתינים לביצוע
+    void processPremoves() noexcept;
+
     std::shared_ptr<IBoard> board_;
     std::shared_ptr<RuleEngine> ruleEngine_;
     RealTimeArbiter arbiter_;
     int currentTimeMs_ = 0;
     bool gameOver_ = false;
+
+    // תור לשמירת מהלכים מראש המשויכים לכלים (כלי יכול להחזיק Premove אחד בכל רגע)
+    std::vector<std::pair<PiecePtr, PremoveData>> premoves_;
 };
 
 }  // namespace kungfu

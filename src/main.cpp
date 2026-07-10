@@ -107,8 +107,7 @@ int main() {
     // 2. אתחול מנוע החוקים, מנוע המשחק והבקר (Controller)
     auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
     auto gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine);
-    kungfu::Controller controller(gameEngine, 100); // 100 pixels per cell
-
+    kungfu::Controller controller(gameEngine); 
     // 3. עיבוד שורות פקודה
     for (const auto& cmd : commandLines) {
         std::istringstream stream(cmd);

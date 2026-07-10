@@ -18,8 +18,9 @@ enum class PlayerColor {
 
 enum class PieceState {
     Idle,       // על הלוח, אינו בתנועה
-    Moving,     // נמצא בדרך ליעד (מנוהל בשכבת זמן אמת)
-    Captured    // הוסר מהמשחק
+    Moving,     // נמצא בדרך ליעד
+    Captured,   // הוסר מהמשחק
+    Airborne    // כלי שנמצא כרגע בעיצומה של קפיצה באוויר
 };
 
 }  // namespace kungfu

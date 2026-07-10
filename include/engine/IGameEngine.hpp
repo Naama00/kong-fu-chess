@@ -1,7 +1,9 @@
 #pragma once
 
 #include <string>
+#include <optional>
 #include "common/Position.hpp"
+#include "common/Enums.hpp" // הוספת ייבוא
 
 namespace kungfu {
 
@@ -14,11 +16,13 @@ class IGameEngine {
 public:
     virtual ~IGameEngine() = default;
 
-    // הגדרת פונקציות טהורות (pure virtual)
     virtual MoveResult requestMove(const Position& from, const Position& to) = 0;
     virtual bool hasPieceAt(const Position& pos) const = 0;
     virtual int getBoardRows() const = 0;
     virtual int getBoardCols() const = 0;
+    
+    // פונקציה חדשה לזיהוי צבע כלי במיקום מסוים
+    virtual std::optional<PlayerColor> getPieceColorAt(const Position& pos) const = 0;
 };
 
 }  // namespace kungfu

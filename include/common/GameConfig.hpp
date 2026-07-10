@@ -10,6 +10,13 @@ struct GameConfig {
     static constexpr int kWhitePawnStartRow = 1;
     static constexpr int kBlackPawnStartRow = 6;
 
+    static constexpr int kDefaultCellSize = 100;
+    static constexpr int kCooldownDurationMs = 2000;
+    static constexpr int kMsPerCellSpeed = 1000;
+
+    // הגדרות חדשות לתכונות המתקדמות בזמן אמת:
+    static constexpr bool kAllowSimultaneousMovement = true; // הדלקת תנועה סימולטנית במקביל
+    static constexpr bool kEnablePremoves = true;            // הדלקת תור מהלכים מראש
 };
 
 }  // namespace kungfu

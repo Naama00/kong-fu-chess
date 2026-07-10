@@ -2,15 +2,15 @@
 
 #include <optional>
 #include "common/Position.hpp"
+#include "common/GameConfig.hpp" // הוספת ייבוא הגדרות
 
 namespace kungfu {
 
 class BoardMapper {
 public:
-    explicit BoardMapper(int cellSize = 100);
+    // שימוש בקבוע החדש כערך ברירת מחדל
+    explicit BoardMapper(int cellSize = GameConfig::kDefaultCellSize);
 
-    // ממירה קואורדינטות פיקסל לתא לוגי בלוח.
-    // מחזירה std::nullopt במידה והקליק מחוץ לגבולות המוגדרים של הלוח.
     std::optional<Position> pixelToCell(int x, int y, int rows, int cols) const noexcept;
 
 private:
