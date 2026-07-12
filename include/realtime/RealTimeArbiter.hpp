@@ -7,6 +7,7 @@
 #include <functional> 
 #include "realtime/Motion.hpp"
 #include "board/IBoard.hpp"
+#include "common/GameConfig.hpp"
 
 namespace kungfu {
 
@@ -38,7 +39,7 @@ public:
 private:
     std::shared_ptr<IBoard> board_;
     std::vector<Motion> activeMotions_; 
-    std::unordered_map<const Piece*, int> cooldowns_;
+    std::unordered_map<std::uint64_t, int> cooldowns_; 
     GameConfig config_;
 
     void handleMidRouteCollisions(std::vector<ArrivalEvent>& events) noexcept;

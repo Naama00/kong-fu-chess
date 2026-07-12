@@ -5,23 +5,25 @@
 
 namespace kungfu {
 
-// הבנאי המעודכן המקבל קונפיגורציית משחק דינמית
-GameEngine::GameEngine(std::shared_ptr<IBoard> board, 
+GameEngine::GameEngine(std::shared_ptr<IBoard> board,
                        std::shared_ptr<RuleEngine> ruleEngine,
-                       GameConfig config) noexcept
+                       GameConfig config,
+                       std::shared_ptr<IPromotionRule> promotionRule) noexcept
     : board_(std::move(board))
     , ruleEngine_(std::move(ruleEngine))
-    , arbiter_(board_)
-    , config_(std::move(config)) {}
+    , promotionRule_(std::move(promotionRule))
+    , config_(config)
+    , arbiter_(board_, config_) {}
+
+bool GameEngine::isPieceBusy(const PiecePtr& piece) const noexcept {
+    return arbiter_.isPieceMoving(piece) ||
+           piece->state() == PieceState::Airborne ||
+           arbiter_.isOnCooldown(piece, currentTimeMs_);
+}
 
 MoveResult GameEngine::requestMove(const Position& from, const Position& to) {
     if (gameOver_) {
         return {false, "game_over"};
-    }
-
-    // שימוש בקונפיגורציה דינמית של תנועה סימולטנית
-    if (!config_.allowSimultaneousMovement && arbiter_.hasActiveMotion()) {
-        return {false, "motion_in_progress"};
     }
 
     if (!board_ || !ruleEngine_) {
@@ -34,42 +36,39 @@ MoveResult GameEngine::requestMove(const Position& from, const Position& to) {
     }
     auto piece = sourcePieceOpt.value();
 
-    // בדיקה האם הכלי עסוק (בתנועה, באוויר או בצינון)
-    bool isPieceBusy = arbiter_.isPieceMoving(piece) || 
-                       piece->state() == PieceState::Airborne || 
-                       arbiter_.isOnCooldown(piece, currentTimeMs_);
-    
-    if (isPieceBusy) {
+    if (!config_.allowSimultaneousMovement) {
+        if (piece->color() != currentTurn_) {
+            return {false, "not_your_turn"};
+        }
+        if (arbiter_.hasActiveMotion()) {
+            return {false, "motion_in_progress"};
+        }
+    }
+
+    if (isPieceBusy(piece)) {
+        if (!config_.allowSimultaneousMovement) {
+            return {false, "piece_busy"};
+        }
         return handlePremoveRegistration(piece, from, to);
     }
 
-    // זיהוי בקשת קפיצה (Jump Request - תנועה מאותה משבצת לעצמה)
     if (from == to) {
         return handleJumpRequest(piece, from);
     }
 
-    // טיפול במהלכי תנועה רגילים
     return handleStandardMove(piece, from, to);
 }
 
 MoveResult GameEngine::handlePremoveRegistration(const PiecePtr& piece, const Position& from, const Position& to) noexcept {
-    // שימוש בקונפיגורציה דינמית לזיהוי האם מהלכים מראש מאופשרים
-    if (config_.enablePremoves) {
-        auto it = std::find_if(premoves_.begin(), premoves_.end(), [&](const auto& pair) {
-            return pair.first == piece;
-        });
-        if (it != premoves_.end()) {
-            it->second = {from, to};
-        } else {
-            premoves_.push_back({piece, {from, to}});
-        }
-        return {true, "premove_registered"};
-    } else {
+    if (!config_.enablePremoves) {
         if (arbiter_.isPieceMoving(piece) || piece->state() == PieceState::Airborne) {
             return {false, "motion_in_progress"};
         }
         return {false, "piece_on_cooldown"};
     }
+
+    premoveQueue_.registerOrUpdate(piece, from, to);
+    return {true, "premove_registered"};
 }
 
 MoveResult GameEngine::handleJumpRequest(const PiecePtr& piece, const Position& pos) noexcept {
@@ -78,8 +77,11 @@ MoveResult GameEngine::handleJumpRequest(const PiecePtr& piece, const Position& 
     }
 
     piece->setState(PieceState::Airborne);
-    // שימוש במשך קפיצה דינמי
     arbiter_.startMotion(piece, pos, pos, currentTimeMs_, config_.jumpDurationMs);
+
+    if (!config_.allowSimultaneousMovement) {
+        advanceTurn();
+    }
 
     return {true, "jump_started"};
 }
@@ -93,13 +95,20 @@ MoveResult GameEngine::handleStandardMove(const PiecePtr& piece, const Position&
     int dr = std::abs(to.row() - from.row());
     int dc = std::abs(to.col() - from.col());
     int distance = std::max(dr, dc);
-    // שימוש במהירות תנועה דינמית למשבצת
     int durationMs = distance * config_.msPerCellSpeed;
 
     piece->setState(PieceState::Moving);
     arbiter_.startMotion(piece, from, to, currentTimeMs_, durationMs);
 
+    if (!config_.allowSimultaneousMovement) {
+        advanceTurn();
+    }
+
     return {true, "ok"};
+}
+
+void GameEngine::advanceTurn() noexcept {
+    currentTurn_ = (currentTurn_ == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
 }
 
 void GameEngine::wait(int ms) noexcept {
@@ -107,57 +116,25 @@ void GameEngine::wait(int ms) noexcept {
         return;
     }
 
-    // הגדרת חוק ההכתרה כלמדא מקומית (חוקי שחמט בסיסיים)
-    auto chessPromotionRule = [this](const PiecePtr& piece, const Position& to) -> PiecePtr {
-        if (piece->type() == PieceType::Pawn) {
-            // זיהוי הגעה לשורה האחרונה בהתאם לצבע הכלי
-            bool shouldPromote = (piece->color() == PlayerColor::White && to.row() == board_->rows() - 1) ||
-                                 (piece->color() == PlayerColor::Black && to.row() == 0);
-            if (shouldPromote) {
-                auto queen = std::make_shared<Piece>(PieceType::Queen, piece->color(), to);
-                board_->replacePiece(to, queen); // החלפה לוגית בלוח
-                return queen;
-            }
+    auto promotionCallback = [this](const PiecePtr& piece, const Position& to) -> PiecePtr {
+        if (!promotionRule_) {
+            return piece;
         }
-        return piece;
+        return promotionRule_->maybePromote(piece, to, *board_);
     };
 
-    // הרצת השעון ב-Arbiter עם פונקציית ה-Callback לחוק ההכתרה
-    auto events = arbiter_.advanceTime(ms, currentTimeMs_, chessPromotionRule);
+    auto events = arbiter_.advanceTime(ms, currentTimeMs_, promotionCallback);
     for (const auto& event : events) {
         if (event.capturedKing) {
             gameOver_ = true;
         }
     }
 
-    // לאחר קידום הזמן, ננסה להפעיל Premoves שהפכו לחוקיים ופנויים כעת
     if (config_.enablePremoves && !gameOver_) {
-        processPremoves();
-    }
-}
-
-void GameEngine::processPremoves() noexcept {
-    for (auto it = premoves_.begin(); it != premoves_.end(); ) {
-        auto piece = it->first;
-        auto data = it->second;
-
-        // בדיקה שהכלי עדיין על הלוח ולא הושמד בזמן הצינון/תנועה
-        if (piece->state() == PieceState::Captured) {
-            it = premoves_.erase(it);
-            continue;
-        }
-
-        // בדיקה שהכלי התפנה ויכול לזוז
-        bool isPieceBusy = arbiter_.isPieceMoving(piece) || arbiter_.isOnCooldown(piece, currentTimeMs_);
-        if (!isPieceBusy) {
-            // שליחת בקשת תנועה רגילה
-            requestMove(data.from, data.to);
-
-            // בכל מקרה מוחקים את ה-Premove מהתור
-            it = premoves_.erase(it);
-            continue;
-        }
-        ++it;
+        premoveQueue_.processReady(
+            [this](const PiecePtr& piece) { return isPieceBusy(piece); },
+            [this](const Position& from, const Position& to) { requestMove(from, to); }
+        );
     }
 }
 

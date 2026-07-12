@@ -57,7 +57,7 @@ void RealTimeArbiter::handleMidRouteCollisions(std::vector<ArrivalEvent>& events
                     auto& loser = (m1.startTime() <= m2.startTime()) ? m2 : m1;
 
                     loser.piece()->setState(PieceState::Captured);
-                    cooldowns_.erase(loser.piece().get());
+                    cooldowns_.erase(loser.piece()->id());     
                     board_->removePiece(loser.from());
 
                     events.push_back({loser.from(), loser.from(), loser.piece(), false, true});
@@ -87,8 +87,7 @@ bool RealTimeArbiter::processSingleArrival(
     // 1. טיפול בנחיתה תקינה של כלי קופץ (Airborne)
     if (from == to && piece->state() == PieceState::Airborne) {
         piece->setState(PieceState::Idle);
-        cooldowns_[piece.get()] = currentTimeMs + config_.cooldownDurationMs;
-        
+        cooldowns_[piece->id()] = currentTimeMs + config_.cooldownDurationMs; 
         events.push_back({from, to, piece, false, false});
         return true;
     }
@@ -101,7 +100,7 @@ bool RealTimeArbiter::processSingleArrival(
         
         if (airbornePiece->color() != piece->color()) {
             piece->setState(PieceState::Captured);
-            cooldowns_.erase(piece.get());
+            cooldowns_.erase(piece->id()); 
             board_->removePiece(from);
 
             events.push_back({from, from, piece, false, true});
@@ -128,29 +127,32 @@ bool RealTimeArbiter::processSingleArrival(
             capturedKing = true;
         }
         targetPiece->setState(PieceState::Captured);
-        cooldowns_.erase(targetPiece.get());
+        cooldowns_.erase(targetPiece->id());  
         board_->removePiece(to);
     }
 
     board_->movePiece(from, to);
     piece->setState(PieceState::Idle);
+    piece->markMoved();
 
-    // עדכון: הפעלת ה-Callback לצורך ביצוע ההכתרה רק במידה והוגדר
     PiecePtr finalPiece = piece;
     if (promoteCallback) {
         finalPiece = promoteCallback(piece, to);
     }
-
-    // רישום הצינון ועדכון רשימת האירועים
-    cooldowns_[finalPiece.get()] = currentTimeMs + config_.cooldownDurationMs;
+    // ניקוי רשומת הצינון של הכלי המקורי אם הוחלף (למשל: רגלי שהוכתר),
+    // כדי למנוע הצטברות רשומות יתומות ב-cooldowns_ שלעולם לא יישאלו יותר
+    if (finalPiece != piece) {
+    cooldowns_.erase(piece->id()); 
+    }
+    cooldowns_[finalPiece->id()] = currentTimeMs + config_.cooldownDurationMs;   
     events.push_back({from, to, finalPiece, capturedKing, false});
-    
+
     return true;
 }
 
 bool RealTimeArbiter::isOnCooldown(const PiecePtr& piece, int currentTimeMs) const noexcept {
     if (!piece) return false;
-    auto it = cooldowns_.find(piece.get());
+    auto it = cooldowns_.find(piece->id());  
     if (it != cooldowns_.end()) {
         return currentTimeMs < it->second;
     }

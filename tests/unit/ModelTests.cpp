@@ -74,3 +74,49 @@ TEST_CASE("Board Management and Mutators", "[model]") {
         REQUIRE_FALSE(board.removePiece(kungfu::Position(0, 0)));
     }
 }
+
+TEST_CASE("Piece hasMoved Flag Behavior", "[model]") {
+    auto piece = std::make_shared<kungfu::Piece>(kungfu::PieceType::Pawn, kungfu::PlayerColor::White, kungfu::Position(1, 0));
+
+    SECTION("Fresh piece has not moved") {
+        REQUIRE_FALSE(piece->hasMoved());
+    }
+
+    SECTION("markMoved sets the flag permanently") {
+        piece->markMoved();
+        REQUIRE(piece->hasMoved());
+    }
+}
+
+TEST_CASE("Piece Identity is Stable and Unique", "[model]") {
+    auto piece1 = std::make_shared<kungfu::Piece>(kungfu::PieceType::Pawn, kungfu::PlayerColor::White, kungfu::Position(0, 0));
+    auto piece2 = std::make_shared<kungfu::Piece>(kungfu::PieceType::Pawn, kungfu::PlayerColor::White, kungfu::Position(0, 0));
+
+    SECTION("Two distinct pieces always get different ids") {
+        REQUIRE(piece1->id() != piece2->id());
+    }
+
+    SECTION("Id remains identical across the piece's lifetime, even after state changes") {
+        auto originalId = piece1->id();
+        piece1->setPosition(kungfu::Position(3, 3));
+        piece1->setState(kungfu::PieceState::Moving);
+        piece1->markMoved();
+        REQUIRE(piece1->id() == originalId);
+    }
+
+    SECTION("A newly created piece never reuses the id of a destroyed one") {
+        std::uint64_t firstId;
+        {
+            auto temporaryPiece = std::make_shared<kungfu::Piece>(
+                kungfu::PieceType::Pawn, kungfu::PlayerColor::Black, kungfu::Position(1, 1));
+            firstId = temporaryPiece->id();
+        } // temporaryPiece משוחרר כאן - כתובת הזיכרון שלו עשויה להיות מנוצלת מחדש
+
+        auto newPiece = std::make_shared<kungfu::Piece>(
+            kungfu::PieceType::Queen, kungfu::PlayerColor::Black, kungfu::Position(1, 1));
+
+        // גם אם newPiece קיבל בפועל את אותה כתובת זיכרון שהייתה ל-temporaryPiece,
+        // ה-id שלו שונה - מה שמונע בדיוק את התנגשות ה-cooldown שהייתה אפשרית קודם
+        REQUIRE(newPiece->id() != firstId);
+    }
+}
