@@ -4,7 +4,6 @@
 #include "board/IBoard.hpp"
 #include "rules/RuleEngine.hpp"
 #include "realtime/RealTimeArbiter.hpp"
-#include "engine/GameSnapshot.hpp"
 #include <vector>
 
 namespace kungfu {
@@ -16,7 +15,9 @@ struct PremoveData {
 
 class GameEngine : public IGameEngine {
 public:
-    GameEngine(std::shared_ptr<IBoard> board, std::shared_ptr<RuleEngine> ruleEngine) noexcept;
+    GameEngine(std::shared_ptr<IBoard> board, 
+               std::shared_ptr<RuleEngine> ruleEngine,
+               GameConfig config = GameConfig{}) noexcept;
     
     MoveResult requestMove(const Position& from, const Position& to) override;
     bool hasPieceAt(const Position& pos) const override;
@@ -27,9 +28,10 @@ public:
     void wait(int ms) noexcept;
     bool isGameOver() const noexcept { return gameOver_; }
     int getCurrentTimeMs() const noexcept { return currentTimeMs_; }
-    
-    GameSnapshot getSnapshot(std::optional<Position> selectedCell) const noexcept;
-    
+     // מאפשר לשכבת התצוגה לגשת ללוח הלוגי לקריאה בלבד
+    std::shared_ptr<const IBoard> getBoard() const noexcept { return board_; }
+    // מאפשר לשכבת התצוגה לגשת למנהל התנועות לקריאה בלבד
+    const RealTimeArbiter& getArbiter() const noexcept { return arbiter_; }
 private:
     void processPremoves() noexcept;
 
@@ -43,6 +45,7 @@ private:
     RealTimeArbiter arbiter_;
     int currentTimeMs_ = 0;
     bool gameOver_ = false;
+    GameConfig config_;    
 
     std::vector<std::pair<PiecePtr, PremoveData>> premoves_;
 };

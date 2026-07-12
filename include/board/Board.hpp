@@ -4,7 +4,6 @@
 #include "board/IBoard.hpp"
 #include "common/Enums.hpp"
 #include "common/Position.hpp"
-#include "pieces/Piece.hpp"
 
 namespace kungfu {
 

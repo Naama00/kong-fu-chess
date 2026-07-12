@@ -4,7 +4,7 @@
 #include <optional>
 #include <vector>
 #include "common/Position.hpp"
-#include "pieces/Piece.hpp"
+#include "board/Piece.hpp"
 
 namespace kungfu {
 

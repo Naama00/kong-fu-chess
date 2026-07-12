@@ -1,15 +1,17 @@
 #pragma once
 
-#include "engine/GameSnapshot.hpp"
+#include "view/GameSnapshot.hpp"
 
 namespace kungfu {
+namespace view {
 
 class IRenderer {
 public:
     virtual ~IRenderer() = default;
 
-    // פונקציית הרישום הראשית המקבלת את הנתונים לקריאה בלבד ומציירת אותם למסך
+    // מקבל תמונת מצב ויזואלית ומצייר אותה למסך
     virtual void render(const GameSnapshot& snapshot) = 0;
 };
 
+}  // namespace view
 }  // namespace kungfu

@@ -6,6 +6,7 @@
 #include "common/Enums.hpp"
 
 namespace kungfu {
+namespace view {
 
 struct PieceSnapshot {
     PieceType type;
@@ -13,7 +14,7 @@ struct PieceSnapshot {
     Position logicalPosition;
     PieceState state;
     
-    // קואורדינטות פיקסל מדויקות לציור (מחושבות מראש כולל אינטרפולציה בזמן תנועה)
+    // מיקומי ציור בפיקסלים לטובת ה-Renderer
     float pixelX;
     float pixelY;
 };
@@ -26,4 +27,5 @@ struct GameSnapshot {
     bool isGameOver;
 };
 
+}  // namespace view
 }  // namespace kungfu

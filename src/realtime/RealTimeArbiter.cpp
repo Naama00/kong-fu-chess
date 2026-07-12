@@ -4,8 +4,8 @@
 
 namespace kungfu {
 
-RealTimeArbiter::RealTimeArbiter(std::shared_ptr<IBoard> board) noexcept
-    : board_(std::move(board)) {}
+RealTimeArbiter::RealTimeArbiter(std::shared_ptr<IBoard> board, GameConfig config) noexcept
+    : board_(std::move(board)), config_(std::move(config)) {}
 
 bool RealTimeArbiter::hasActiveMotion() const noexcept {
     return !activeMotions_.empty();
@@ -15,7 +15,8 @@ void RealTimeArbiter::startMotion(PiecePtr piece, const Position& from, const Po
     activeMotions_.emplace_back(std::move(piece), from, to, currentTimeMs, durationMs);
 }
 
-std::vector<ArrivalEvent> RealTimeArbiter::advanceTime(int ms, int& currentTimeMs) noexcept {
+// עדכון: קבלת ה-Callback והעברתו לניהול הנחיתות
+std::vector<ArrivalEvent> RealTimeArbiter::advanceTime(int ms, int& currentTimeMs, PromotionHandler promoteCallback) noexcept {
     std::vector<ArrivalEvent> events;
     currentTimeMs += ms;
 
@@ -25,7 +26,7 @@ std::vector<ArrivalEvent> RealTimeArbiter::advanceTime(int ms, int& currentTimeM
     // 2. עיבוד הגעה ליעדים
     for (auto it = activeMotions_.begin(); it != activeMotions_.end(); ) {
         if (currentTimeMs >= it->arrivalTime()) {
-            if (processSingleArrival(it, currentTimeMs, events)) {
+            if (processSingleArrival(it, currentTimeMs, events, promoteCallback)) {
                 it = activeMotions_.erase(it);
             } else {
                 ++it;
@@ -39,7 +40,7 @@ std::vector<ArrivalEvent> RealTimeArbiter::advanceTime(int ms, int& currentTimeM
 }
 
 void RealTimeArbiter::handleMidRouteCollisions(std::vector<ArrivalEvent>& events) noexcept {
-    if (!GameConfig::kAllowSimultaneousMovement || activeMotions_.size() < 2) {
+    if (!config_.allowSimultaneousMovement || activeMotions_.size() < 2) {
         return;
     }
 
@@ -73,7 +74,12 @@ void RealTimeArbiter::handleMidRouteCollisions(std::vector<ArrivalEvent>& events
     );
 }
 
-bool RealTimeArbiter::processSingleArrival(std::vector<Motion>::iterator it, int currentTimeMs, std::vector<ArrivalEvent>& events) noexcept {
+bool RealTimeArbiter::processSingleArrival(
+    std::vector<Motion>::iterator it, 
+    int currentTimeMs, 
+    std::vector<ArrivalEvent>& events,
+    const PromotionHandler& promoteCallback
+) noexcept {
     Position from = it->from();
     Position to = it->to();
     auto piece = it->piece();
@@ -81,7 +87,7 @@ bool RealTimeArbiter::processSingleArrival(std::vector<Motion>::iterator it, int
     // 1. טיפול בנחיתה תקינה של כלי קופץ (Airborne)
     if (from == to && piece->state() == PieceState::Airborne) {
         piece->setState(PieceState::Idle);
-        cooldowns_[piece.get()] = currentTimeMs + GameConfig::kCooldownDurationMs;
+        cooldowns_[piece.get()] = currentTimeMs + config_.cooldownDurationMs;
         
         events.push_back({from, to, piece, false, false});
         return true;
@@ -129,30 +135,17 @@ bool RealTimeArbiter::processSingleArrival(std::vector<Motion>::iterator it, int
     board_->movePiece(from, to);
     piece->setState(PieceState::Idle);
 
-    // ביצוע ההכתרה רק אם מדובר ברגלי
+    // עדכון: הפעלת ה-Callback לצורך ביצוע ההכתרה רק במידה והוגדר
     PiecePtr finalPiece = piece;
-    if (piece->type() == PieceType::Pawn) {
-        finalPiece = handlePawnPromotion(piece, to);
+    if (promoteCallback) {
+        finalPiece = promoteCallback(piece, to);
     }
 
     // רישום הצינון ועדכון רשימת האירועים
-    cooldowns_[finalPiece.get()] = currentTimeMs + GameConfig::kCooldownDurationMs;
+    cooldowns_[finalPiece.get()] = currentTimeMs + config_.cooldownDurationMs;
     events.push_back({from, to, finalPiece, capturedKing, false});
     
     return true;
-}
-
-PiecePtr RealTimeArbiter::handlePawnPromotion(const PiecePtr& piece, const Position& to) noexcept {
-    bool promote = (piece->color() == PlayerColor::White && to.row() == board_->rows() - 1) ||
-                   (piece->color() == PlayerColor::Black && to.row() == 0);
-                   
-    if (promote) {
-        auto queen = std::make_shared<Piece>(PieceType::Queen, piece->color(), to);
-        board_->replacePiece(to, queen);
-        return queen;
-    }
-
-    return piece;
 }
 
 bool RealTimeArbiter::isOnCooldown(const PiecePtr& piece, int currentTimeMs) const noexcept {

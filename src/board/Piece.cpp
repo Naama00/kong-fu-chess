@@ -1,4 +1,4 @@
-#include "pieces/Piece.hpp"
+#include "board/Piece.hpp"
 
 namespace kungfu {
 

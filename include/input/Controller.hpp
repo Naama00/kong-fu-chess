@@ -5,7 +5,7 @@
 #include <string>
 #include "input/BoardMapper.hpp"
 #include "common/Position.hpp"
-#include "common/GameConfig.hpp" // הוספת ייבוא הגדרות
+#include "common/GameConfig.hpp" 
 
 namespace kungfu {
 
@@ -24,7 +24,7 @@ public:
     ControllerResult click(int x, int y);
     std::optional<Position> selectedPosition() const noexcept;
     void clearSelection() noexcept;
-
+    void setCellSize(int cellSize) noexcept { mapper_.setCellSize(cellSize); }
 private:
     std::shared_ptr<IGameEngine> engine_;
     BoardMapper mapper_;

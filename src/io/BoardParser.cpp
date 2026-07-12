@@ -1,5 +1,5 @@
 #include "io/BoardParser.hpp"
-#include "pieces/Piece.hpp"
+#include "board/Piece.hpp"
 #include <sstream>
 #include <algorithm>
 #include <cctype>

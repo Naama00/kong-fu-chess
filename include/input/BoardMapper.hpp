@@ -2,7 +2,7 @@
 
 #include <optional>
 #include "common/Position.hpp"
-#include "common/GameConfig.hpp" // הוספת ייבוא הגדרות
+#include "common/GameConfig.hpp" 
 
 namespace kungfu {
 
@@ -12,6 +12,8 @@ public:
     explicit BoardMapper(int cellSize = GameConfig::kDefaultCellSize);
 
     std::optional<Position> pixelToCell(int x, int y, int rows, int cols) const noexcept;
+
+    void setCellSize(int cellSize) noexcept { cellSize_ = cellSize; }
 
 private:
     int cellSize_;

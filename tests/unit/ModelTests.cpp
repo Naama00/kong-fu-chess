@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "common/Position.hpp"
-#include "pieces/Piece.hpp"
+#include "board/Piece.hpp"
 #include "board/Board.hpp"
 
 TEST_CASE("Position Model Behavior", "[model]") {

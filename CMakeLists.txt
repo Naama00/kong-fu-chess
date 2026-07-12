@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(kungfu_engine
     src/common/Position.cpp
-    src/pieces/Piece.cpp
+    src/board/Piece.cpp   
     src/board/Board.cpp
     src/io/BoardParser.cpp
     src/io/BoardPrinter.cpp
@@ -18,6 +18,7 @@ add_library(kungfu_engine
     src/realtime/Motion.cpp
     src/realtime/RealTimeArbiter.cpp
     src/engine/GameEngine.cpp
+    src/view/SnapshotBuilder.cpp
 )
 target_include_directories(kungfu_engine PUBLIC include)
 
