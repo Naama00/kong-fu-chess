@@ -22,6 +22,8 @@ public:
     // נקראת כאשר השחקן מבצע מהלך לא חוקי – הכוונה לדרוס ולבטל את ה-premove.
     void cancel(const PiecePtr& piece) noexcept;
 
+    void replacePiece(const PiecePtr& oldPiece, const PiecePtr& newPiece) noexcept;
+    
     void processReady(const PieceBusyPredicate& isBusy, const MoveExecutor& execute);
 
     bool empty() const noexcept { return entries_.empty(); }

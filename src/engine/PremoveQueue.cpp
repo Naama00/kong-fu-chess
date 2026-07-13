@@ -24,6 +24,14 @@ void PremoveQueue::cancel(const PiecePtr& piece) noexcept {
     );
 }
 
+void PremoveQueue::replacePiece(const PiecePtr& oldPiece, const PiecePtr& newPiece) noexcept {
+    for (auto& entry : entries_) {
+        if (entry.first == oldPiece) {
+            entry.first = newPiece;
+        }
+    }
+}
+
 void PremoveQueue::processReady(const PieceBusyPredicate& isBusy, const MoveExecutor& execute) {
     for (auto it = entries_.begin(); it != entries_.end(); ) {
         auto piece = it->first;

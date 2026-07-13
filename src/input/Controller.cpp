@@ -26,8 +26,8 @@ ControllerResult Controller::click(int x, int y) {
     if (selectedPosition_.has_value()) {
         Position from = selectedPosition_.value();
         
-        // חוק מיוחד: אם משבצת היעד מכילה כלי ידידותי, מחליפים את הסימון אליו
-        if (engine_->hasPieceAt(targetCell)) {
+        // מחליפים את הסימון רק אם לחצנו על כלי ידידותי אחר
+        if (from != targetCell && engine_->hasPieceAt(targetCell)) {
             auto fromColor = engine_->getPieceColorAt(from);
             auto targetColor = engine_->getPieceColorAt(targetCell);
             if (fromColor.has_value() && targetColor.has_value() && fromColor.value() == targetColor.value()) {
@@ -36,7 +36,7 @@ ControllerResult Controller::click(int x, int y) {
             }
         }
         
-        // שליחת בקשת התנועה למנוע המשחק (עבור תא ריק או כלי עוין)
+        // שליחת בקשת התנועה למנוע המשחק (כעת, לחיצה שנייה על אותו כלי תגיע לכאן ותפעיל קפיצה!)
         auto moveResult = engine_->requestMove(from, targetCell);
         
         // פינוי הסימון באופן מיידי לאחר הניסיון

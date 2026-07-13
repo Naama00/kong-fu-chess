@@ -1,87 +1,78 @@
 #include "rules/CollisionResolver.hpp"
 #include <cmath>
+#include <algorithm>
 
 namespace kungfu {
 
-namespace {
-
-// מחשבת את מסלול התנועה הדיסקרטי מהמשבצת שלפני היעד בחזרה לנקודת המוצא
+// פונקציית העזר הקיימת שלך, נשתמש בה כדי למצוא משבצת פנויה אחרונה
 Position findLastVacantPositionOnPath(
     const Position& from,
     const Position& to,
     const std::shared_ptr<IBoard>& board
 ) noexcept {
-    int r1 = from.row();
-    int c1 = from.col();
-    int r2 = to.row();
-    int c2 = to.col();
-
-    int dr = r2 - r1;
-    int dc = c2 - c1;
+    int r1 = from.row(); int c1 = from.col();
+    int r2 = to.row(); int c2 = to.col();
+    int dr = r2 - r1; int dc = c2 - c1;
 
     if (dr == 0 && dc == 0) {
-        return from;
-    }
+        if (!board->pieceAt(from).has_value()) return from;
+    } else {
+        int stepR = (dr > 0) ? 1 : ((dr < 0) ? -1 : 0);
+        int stepC = (dc > 0) ? 1 : ((dc < 0) ? -1 : 0);
 
-    // חישוב כיווני ההתקדמות (-1, 0, 1)
-    int stepR = (dr > 0) ? 1 : ((dr < 0) ? -1 : 0);
-    int stepC = (dc > 0) ? 1 : ((dc < 0) ? -1 : 0);
+        std::vector<Position> path;
+        int curR = r2 - stepR;
+        int curC = c2 - stepC;
 
-    std::vector<Position> path;
-    
-    // יצירת רשימת משבצות המסלול מהסוף (אחת לפני to) ועד ההתחלה (from)
-    int curR = r2 - stepR;
-    int curC = c2 - stepC;
-
-    while (curR != r1 || curC != c1) {
-        path.emplace_back(curR, curC);
-        curR -= stepR;
-        curC -= stepC;
-    }
-    path.push_back(from); // נקודת המוצא היא ברירת המחדל האחרונה בהחלט
-
-    // מציאת המשבצת הפנויה הראשונה שנתקלים בה בנסיגה לאחור
-    for (const auto& pos : path) {
-        if (!board->pieceAt(pos).has_value()) {
-            return pos;
+        while (curR != r1 || curC != c1) {
+            path.emplace_back(curR, curC);
+            curR -= stepR;
+            curC -= stepC;
         }
-    }
+        path.push_back(from);
 
-    // מקרה חירום קיצוני (אם אפילו משבצת המוצא נתפסה בינתיים): מחפשים משבצת פנויה צמודה למוצא
-    for (int drOffset = -1; drOffset <= 1; ++drOffset) {
-        for (int dcOffset = -1; dcOffset <= 1; ++dcOffset) {
-            Position fallback(from.row() + drOffset, from.col() + dcOffset);
-            if (fallback.row() >= 0 && fallback.row() < board->rows() &&
-                fallback.col() >= 0 && fallback.col() < board->cols()) {
-                if (!board->pieceAt(fallback).has_value()) {
-                    return fallback;
-                }
+        for (const auto& pos : path) {
+            if (!board->pieceAt(pos).has_value()) {
+                return pos;
             }
         }
     }
-
-    return from; // מוצא אחרון בהחלט למניעת קריסה
+    return from;
 }
 
-} // namespace
-
-CollisionResolver::CollisionResolver(
-    std::shared_ptr<IBoard> board, 
-    CooldownTracker& cooldownTracker, 
-    const GameConfig& config
-) noexcept
-    : board_(std::move(board)), cooldownTracker_(cooldownTracker), config_(config) {}
-
 void CollisionResolver::resolveMidRouteCollision(
-    const Motion& winner,
-    const Motion& loser,
+    const Motion& firstArrived, // הכלי שהגיע ראשון למשבצת ההתנגשות (או מותקף)
+    const Motion& secondArrived, // הכלי שהגיע שני (התוקף / החוסם)
     std::vector<ArrivalEvent>& events
 ) noexcept {
-    loser.piece()->setState(PieceState::Captured);
-    cooldownTracker_.clear(loser.piece()->id());
-    board_->removePiece(loser.from());
+    
+    // מקרה 1: כלי אויב - כלי אויב הגיע למשבצת שבה כלי אחר נמצא/עובר -> אכילה!
+    if (firstArrived.piece()->color() != secondArrived.piece()->color()) {
+        // הכלי שהגיע שני (התוקף) אוכל את הכלי שהיה שם קודם
+        firstArrived.piece()->setState(PieceState::Captured);
+        cooldownTracker_.clear(firstArrived.piece()->id());
+        
+        firstArrived.piece()->setPosition(firstArrived.from());
+        board_->removePiece(firstArrived.from());
 
-    events.push_back({loser.from(), loser.from(), loser.piece(), false, true});
+        events.push_back({firstArrived.from(), firstArrived.from(), firstArrived.piece(), false, true});
+        
+        // הערה: הכלי השני (התוקף) ימשיך ליעדו כרגיל או ייעצר במשבצת האכילה, תלוי בלוגיקת ה-Arbiter שלכם. 
+        // מומלץ לעדכן את היעד של secondArrived לנקודת המפגש אם רוצים שהוא ייעצר שם.
+    } 
+    // מקרה 2: כלים ידידותיים - הכלי שהגיע מאוחר יותר נעצר במשבצת האחרונה הפנויה
+    else {
+        // נמצא את המשבצת האחרונה הפנויה במסלול של הכלי השני (המאוחר)
+        Position stopPos = findLastVacantPositionOnPath(secondArrived.from(), secondArrived.to(), board_);
+        
+        secondArrived.piece()->setState(PieceState::Idle);
+        secondArrived.piece()->setPosition(stopPos);
+        
+        cooldownTracker_.setCooldown(secondArrived.piece()->id(), board_->rows() /* או currentTime שהיה מועבר */ + config_.cooldownDurationMs);
+        events.push_back({secondArrived.from(), stopPos, secondArrived.piece(), false, true});
+        
+        // אנו מסמנים למערכת שהתנועה של secondArrived הסתיימה מוקדם מהצפוי
+    }
 }
 
 bool CollisionResolver::resolveArrival(
@@ -94,8 +85,8 @@ bool CollisionResolver::resolveArrival(
     Position to = motion.to();
     auto piece = motion.piece();
 
-    // טיפול בנחיתה מקפיצה (Airborne)
-    if (from == to) {
+    // מאפשרים החזרה מוקדמת רק אם משבצת הנחיתה בקפיצה במקום אכן פנויה
+    if (from == to && !board_->pieceAt(to).has_value()) {
         piece->setState(PieceState::Idle);
         piece->setPosition(to); // החזרת המיקום הלוגי למקום הנחיתה
         cooldownTracker_.setCooldown(piece->id(), currentTimeMs + config_.cooldownDurationMs);

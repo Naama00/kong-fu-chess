@@ -124,14 +124,17 @@ void GameEngine::wait(int ms) noexcept {
     if (ms <= 0 || !board_) {
         return;
     }
-
     auto promotionCallback = [this](const PiecePtr& piece, const Position& to) -> PiecePtr {
         if (!promotionRule_) {
             return piece;
         }
-        return promotionRule_->maybePromote(piece, to, *board_);
+        auto promoted = promotionRule_->maybePromote(piece, to, *board_);
+        //   : אם הרגלי הוכתר לכלי חדש, נעדכן את תור ה-Premove
+        if (promoted != piece) {
+            premoveQueue_.replacePiece(piece, promoted);
+        }
+        return promoted;
     };
-
     auto events = arbiter_.advanceTime(ms, currentTimeMs_, promotionCallback);
     for (const auto& event : events) {
         if (event.capturedKing) {
