@@ -11,25 +11,29 @@ class ImgInputTranslator : public IInputTranslator {
 private:
     Vector2D m_logicalRange{1000.0f, 1000.0f};
     std::string m_windowName;
-    Vector2D m_contentSize{1000.0f, 1000.0f}; // גודל קנבס התוכן הלוגי
+    Vector2D m_contentSize{1000.0f, 1000.0f};
 
-    static std::vector<InputEvent> s_pendingMouseEvents;
-    static std::mutex s_eventsMutex;
+    // התור הפך להיות משתנה חבר מופע (instance member) רגיל ולא סטטי!
+    std::vector<InputEvent> m_pendingMouseEvents;
+    std::mutex m_eventsMutex;
 
+    // ה-Callback הסטטי של OpenCV מקבל את ה-this כ-userdata ומנתב ישירות למופע המתאים
     static void onMouse(int event, int x, int y, int flags, void* userdata) {
         (void)flags;
         auto* translator = static_cast<ImgInputTranslator*>(userdata);
         if (!translator) return;
 
+        translator->handleMouseCallback(event, x, y);
+    }
+
+    void handleMouseCallback(int event, int x, int y) {
         MouseEvent mouseEvent;
 
-        // שואלים את OpenCV על גודל אזור הציור הנוכחי של החלון (client area)
-        // ומחשבים letterbox בדיוק כמו ב-presentFrame — כך תמיד מסונכרן.
-        cv::Rect winRect = cv::getWindowImageRect(translator->m_windowName);
+        cv::Rect winRect = cv::getWindowImageRect(m_windowName);
         int winW = winRect.width;
         int winH = winRect.height;
-        int contentW = static_cast<int>(translator->m_contentSize.x);
-        int contentH = static_cast<int>(translator->m_contentSize.y);
+        int contentW = static_cast<int>(m_contentSize.x);
+        int contentH = static_cast<int>(m_contentSize.y);
 
         if (winW > 0 && winH > 0 && contentW > 0 && contentH > 0) {
             float scale = std::min(static_cast<float>(winW) / contentW,
@@ -37,11 +41,9 @@ private:
             float padX = (winW - contentW * scale) / 2.0f;
             float padY = (winH - contentH * scale) / 2.0f;
 
-            // מנכים את הריפוד ומחלקים ב-scale → קואורדינטה לוגית
             mouseEvent.logicalX = (x - padX) / scale;
             mouseEvent.logicalY = (y - padY) / scale;
         } else {
-            // fallback בטוח: לפני שהחלון מוכן
             mouseEvent.logicalX = static_cast<float>(x);
             mouseEvent.logicalY = static_cast<float>(y);
         }
@@ -79,11 +81,11 @@ private:
         }
 
         if (relevantEvent) {
-            std::lock_guard<std::mutex> lock(s_eventsMutex);
+            std::lock_guard<std::mutex> lock(m_eventsMutex);
             InputEvent ie;
             ie.type = InputEvent::Type::Mouse;
             ie.mouse = mouseEvent;
-            s_pendingMouseEvents.push_back(ie);
+            m_pendingMouseEvents.push_back(ie);
         }
     }
 
@@ -108,6 +110,7 @@ public:
         m_windowName = windowName;
         m_windowSize = windowSize;
         m_contentSize = contentSize;
+        // העברת ה-this מצביע כארגומנט האחרון
         cv::setMouseCallback(windowName, onMouse, this);
     }
 
@@ -121,9 +124,9 @@ public:
 
     void pollEvents(std::vector<InputEvent>& outEvents) override {
         {
-            std::lock_guard<std::mutex> lock(s_eventsMutex);
-            outEvents.insert(outEvents.end(), s_pendingMouseEvents.begin(), s_pendingMouseEvents.end());
-            s_pendingMouseEvents.clear();
+            std::lock_guard<std::mutex> lock(m_eventsMutex);
+            outEvents.insert(outEvents.end(), m_pendingMouseEvents.begin(), m_pendingMouseEvents.end());
+            m_pendingMouseEvents.clear();
         }
 
         int keyResult = cv::waitKey(1);
@@ -139,6 +142,3 @@ public:
         }
     }
 };
-
-inline std::vector<InputEvent> ImgInputTranslator::s_pendingMouseEvents;
-inline std::mutex ImgInputTranslator::s_eventsMutex;

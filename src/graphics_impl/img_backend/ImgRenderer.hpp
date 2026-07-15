@@ -9,7 +9,6 @@
 #include <unordered_map>
 #include <utility>
 
-// מימוש נכס תמונה עבור ה-AssetManager המבוסס על ה-Img שלכם
 class ImgTextureAsset : public IAsset
 {
 public:
@@ -28,10 +27,11 @@ private:
     std::string m_windowName;
     Vector2D m_logicalRange{1000.0f, 1000.0f};
     AssetManager m_assetManager;
-    std::unordered_map<std::string, std::pair<Vector2D, Img>> m_spriteScaleCache;
 
-    // ה-letterbox transform הנוכחי — מתעדכן בכל presentFrame.
-    // מאפשר ל-ImgInputTranslator לתרגם קואורדינטות עכבר נכון.
+    // שיפור מפתח המטמון: שימוש בכתובת המצביע (pointer address) של ה-Asset.
+    // זה מונע הקצאות והשוואת מחרוזות יקרה בכל פריים עבור כל כלי שחמט!
+    std::unordered_map<const IAsset*, std::pair<Vector2D, Img>> m_spriteScaleCache;
+
     struct LetterboxTransform {
         float padX  = 0.0f;
         float padY  = 0.0f;
@@ -41,13 +41,11 @@ private:
     };
     LetterboxTransform m_letterbox;
 
-    // המרת צבע לוגי ל-cv::Scalar של OpenCV (בפורמט BGRA/BGR)
     cv::Scalar toCvScalar(Color color) const
     {
         return cv::Scalar(color.b, color.g, color.r, color.a);
     }
 
-    // תרגום קואורדינטה לוגית לנקודה פיזית על ה-cv::Mat
     cv::Point toPhysical(Vector2D logicalPos) const
     {
         Vector2D targetSize = getTargetSize();
@@ -56,7 +54,6 @@ private:
             static_cast<int>((logicalPos.y / m_logicalRange.y) * targetSize.y));
     }
 
-    // תרגום מימדים לוגיים למימדים פיזיים
     cv::Size sizeToPhysical(Vector2D logicalSize) const
     {
         Vector2D targetSize = getTargetSize();
@@ -69,30 +66,24 @@ public:
     explicit ImgRenderer(Img &screenCanvas, std::string windowName)
         : m_screenCanvas(screenCanvas), m_windowName(std::move(windowName)) {}
 
-    void beginFrame() override
-    {
-        // הכנה לתחילת פריים (ניתן להוסיף לוגיקה במידת הצורך)
+    // פונקציה לניקוי יזום של ה-cache בעת מעבר בין מסכים
+    void clearCache() {
+        m_spriteScaleCache.clear();
     }
+
+    void beginFrame() override {}
 
     void clear(Color color) override
     {
-        if (!m_screenCanvas.is_loaded())
-        {
-            return;
-        }
-        // צביעת המטריצה כולה בצבע הרקע שנבחר
+        if (!m_screenCanvas.is_loaded()) return;
         m_screenCanvas.mat().setTo(toCvScalar(color));
     }
 
-    void endFrame() override
-    {
-        // סיום פריים (למשל חישובים סופיים לפני הצגה, אם יידרשו בעתיד)
-    }
+    void endFrame() override {}
 
     void presentFrame() override
     {
-        if (!m_screenCanvas.is_loaded())
-            return;
+        if (!m_screenCanvas.is_loaded()) return;
 
         const cv::Mat& content = m_screenCanvas.get_mat();
         int contentW = content.cols;
@@ -114,7 +105,6 @@ public:
         int padX = (winW - scaledW) / 2;
         int padY = (winH - scaledH) / 2;
 
-        // שמירת ה-transform לשימוש ב-ImgInputTranslator
         m_letterbox = { static_cast<float>(padX), static_cast<float>(padY), scale, winW, winH };
 
         cv::Mat scaled;
@@ -124,8 +114,6 @@ public:
         cv::imshow(m_windowName, frame);
     }
 
-    // מחזיר את ה-letterbox transform האחרון — ImgInputTranslator צריך את זה
-    // כדי לתרגם קואורדינטות עכבר נכון כשהחלון שונה מגודל ברירת המחדל.
     const LetterboxTransform& getLetterboxTransform() const { return m_letterbox; }
 
     bool isWindowOpen() const override
@@ -143,8 +131,7 @@ public:
 
     void drawRectangle(Vector2D position, Vector2D size, Color color, bool fill) override
     {
-        if (!m_screenCanvas.is_loaded())
-            return;
+        if (!m_screenCanvas.is_loaded()) return;
 
         cv::Point topLeft = toPhysical(position);
         cv::Size physSize = sizeToPhysical(size);
@@ -156,8 +143,7 @@ public:
 
     void drawLine(Vector2D start, Vector2D end, Color color, float thickness) override
     {
-        if (!m_screenCanvas.is_loaded())
-            return;
+        if (!m_screenCanvas.is_loaded()) return;
 
         cv::Point p1 = toPhysical(start);
         cv::Point p2 = toPhysical(end);
@@ -167,8 +153,7 @@ public:
 
     void drawCircle(Vector2D center, float radius, Color color, bool fill) override
     {
-        if (!m_screenCanvas.is_loaded())
-            return;
+        if (!m_screenCanvas.is_loaded()) return;
 
         cv::Point physCenter = toPhysical(center);
         Vector2D targetSize = getTargetSize();
@@ -185,14 +170,12 @@ public:
                     const Vector2D *srcOffset,
                     const Vector2D *srcSize) override
     {
-        if (!m_screenCanvas.is_loaded())
-            return;
+        if (!m_screenCanvas.is_loaded()) return;
 
         try
         {
             auto &asset = m_assetManager.getAsset<ImgTextureAsset>(assetId);
-            if (!asset.image.is_loaded())
-                return;
+            if (!asset.image.is_loaded()) return;
 
             cv::Point physPos = toPhysical(position);
             cv::Size physSize = sizeToPhysical(size);
@@ -200,8 +183,6 @@ public:
             Img spriteToDraw;
             if (srcOffset && srcSize)
             {
-                // נתיב ה-Sprite Sheet/Atlas לא נכנס למטמון (פחות נפוץ, וגם
-                // ה-ROI עצמו יכול להשתנות בין קריאות עם אותו assetId).
                 const cv::Mat &srcMat = asset.image.get_mat();
                 cv::Rect roi(
                     static_cast<int>(srcOffset->x),
@@ -218,11 +199,10 @@ public:
             }
             else
             {
-                // תיקון: הנתיב הנפוץ (תמונה שלמה, בלי סיבוב) - בדיקת מטמון
-                // לפני ביצוע cv::resize. ברוב הפריימים גודל התא לא משתנה,
-                // כך שברירת המחדל היא cache hit ולא resize חוזר על כל כלי.
                 Vector2D requestedSize{static_cast<float>(physSize.width), static_cast<float>(physSize.height)};
-                std::string cacheKey(assetId);
+                
+                // שיפור: שימוש בכתובת המצביע של האובייקט בתוך ה-Cache במקום מחרוזת
+                const IAsset* cacheKey = &asset;
 
                 auto cacheIt = m_spriteScaleCache.find(cacheKey);
                 bool cacheHit = cacheIt != m_spriteScaleCache.end() &&
@@ -244,8 +224,6 @@ public:
                 }
             }
 
-            // ביצוע סיבוב לתמונה במידה וצוין (rotationDegrees != 0) - תמיד
-            // מחושב על עותק, כך שהמטמון עצמו אף פעם לא מכיל תמונה מסובבת.
             if (std::abs(rotationDegrees) > 0.01f)
             {
                 cv::Mat rotated;
@@ -255,40 +233,30 @@ public:
                 spriteToDraw.mat() = rotated;
             }
 
-            // ציור ה-Sprite על גבי קנבס המסך הראשי
             spriteToDraw.draw_on(m_screenCanvas, physPos.x, physPos.y);
         }
         catch (...)
         {
-            // ציור מלבן ורוד חלופי (Fallback במקרה של שגיאה בטעינת הנכס)
             drawRectangle(position, size, {255, 0, 255, 255}, true);
         }
     }
 
     void drawText(std::string_view text, Vector2D position, int fontSize, Color color) override
     {
-        if (!m_screenCanvas.is_loaded())
-            return;
+        if (!m_screenCanvas.is_loaded()) return;
 
         cv::Point physPos = toPhysical(position);
-
         Vector2D targetSize = getTargetSize();
         double fontScale = (fontSize / 24.0) * (targetSize.x / m_logicalRange.x);
 
-        m_screenCanvas.put_text(
-            std::string(text),
-            physPos.x,
-            physPos.y,
-            fontScale,
-            toCvScalar(color),
-            1);
+        m_screenCanvas.put_text(text, physPos.x, physPos.y, fontScale, toCvScalar(color), 1);
     }
 
     Vector2D getTargetSize() const override
     {
         if (!m_screenCanvas.is_loaded())
         {
-            return {800.0f, 800.0f}; // ברירת מחדל בטוחה
+            return {800.0f, 800.0f};
         }
         const cv::Mat &mat = m_screenCanvas.get_mat();
         return {static_cast<float>(mat.cols), static_cast<float>(mat.rows)};

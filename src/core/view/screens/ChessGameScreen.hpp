@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ui/framework/IScreen.hpp"
+#include "BaseScreen.hpp"
 #include "ui/framework/ScreenManager.hpp"
 #include "ui/components/CooldownBar.hpp"
 #include "ui/components/Button.hpp" 
@@ -14,8 +14,10 @@
 #include <unordered_map>
 #include <string>
 #include <vector>
+#include <cmath>
+#include <algorithm>
 
-class ChessGameScreen : public IScreen {
+class ChessGameScreen : public BaseScreen {
 private:
     std::shared_ptr<kungfu::GameEngine> m_gameEngine;
     std::shared_ptr<kungfu::Controller> m_controller;
@@ -24,28 +26,47 @@ private:
     
     bool m_isPaused = false;
 
-    // היסטוריית מהלכים מופרדת לשני השחקנים
+    // היסטוריית מהלכים
     std::vector<std::string> m_whiteHistory;
     std::vector<std::string> m_blackHistory;
 
-    // כפתורי בקרה (מעתה ממוקמים ב-Header העליון ליד הכותרת)
+    // כפתורי בקרה
     std::unique_ptr<Button> m_pauseButton;
     std::unique_ptr<Button> m_sidebarRestartButton;
     std::unique_ptr<Button> m_sidebarMenuButton;
 
-    // כפתורי סוף המשחק (ממורכזים מעל הלוח בסיום)
+    // כפתורי סוף המשחק
     std::unique_ptr<Button> m_rematchButton;
     std::unique_ptr<Button> m_menuButton;
     
-    // הגדרות פריסת קואורדינטות קבועות בתוך מרחב 1000x1000 הלוגי
-    float m_boardStartX = 0.0f;
-    float m_boardStartY = 100.0f; // הלוח ממוקם בין y=100 ל-y=900
-    float m_boardRangeX = 800.0f;
-    float m_boardRangeY = 800.0f;
-    float m_logicalRangeX = 1000.0f;
-    float m_logicalRangeY = 1000.0f;
+    // פריסת הלוח (בתוך מרחב 1000x1000 הלוגי)
+    const float m_boardStartX = 0.0f;
+    const float m_boardStartY = 100.0f; 
+    const float m_boardRangeX = 800.0f;
+    const float m_boardRangeY = 800.0f;
 
-    // חישוב ערך חומרי (נקודות) של כלי שחמט סטנדרטי [1]
+    struct BoardPos {
+        int row = -1;
+        int col = -1;
+        bool isValid() const { return row >= 0 && row < 8 && col >= 0 && col < 8; }
+        bool operator==(const BoardPos& other) const { return row == other.row && col == other.col; }
+        bool operator!=(const BoardPos& other) const { return !(*this == other); }
+    };
+
+    struct PieceAnimation {
+        bool isJumping = false;
+        float jumpTimer = 0.0f;
+    };
+
+    float m_totalTime = 0.0f;
+    float m_lastClickTime = 0.0f;
+    BoardPos m_lastClickedTile;
+    bool m_isHovering = false; 
+    PieceAnimation m_selectedPieceAnim;
+
+    BoardPos m_hoveredTile{-1, -1};
+    Vector2D m_mousePos{0.0f, 0.0f};
+
     int getPieceValue(kungfu::PieceType type) const {
         switch (type) {
             case kungfu::PieceType::Queen:  return 9;
@@ -57,20 +78,17 @@ private:
         }
     }
 
-    // חישוב סך הנקודות הנוכחי עבור כל צבע
     int calculatePlayerScore(kungfu::PlayerColor color) const {
         int total = 0;
         if (!m_gameEngine || !m_gameEngine->getBoard()) {
             return 0;
         }
 
-        // 1. חישוב נקודות מהכלים שעל הלוח
         for (const auto& piece : m_gameEngine->getBoard()->pieces()) {
             if (piece && piece->color() == color && piece->state() != kungfu::PieceState::Captured) {
                 total += getPieceValue(piece->type());
             }
         }
-        // 2. חישוב נקודות מכלים שנמצאים כרגע בתנועה או קפיצה באוויר
         for (const auto& motion : m_gameEngine->getArbiter().activeMotions()) {
             auto piece = motion.piece();
             if (piece && piece->color() == color && piece->state() == kungfu::PieceState::Airborne) {
@@ -101,22 +119,23 @@ private:
         m_gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine, m_config);
         m_controller = std::make_shared<kungfu::Controller>(m_gameEngine);
         
-        // הגדרת משבצת וירטואלית יציבה של 100 עבור ה-Controller
         m_controller->setCellSize(100);
 
         m_isPaused = false;
+        m_isHovering = false;
+        m_selectedPieceAnim.isJumping = false;
+        m_selectedPieceAnim.jumpTimer = 0.0f;
         
         m_whiteHistory.clear();
         m_blackHistory.clear();
         m_whiteHistory.push_back("Connected");
         m_blackHistory.push_back("Connected");
 
-        // אתחול כפתור ההשהיה ב-Header העליון (מיושר לצד ימין של פס הכותרת)
         m_pauseButton = std::make_unique<Button>(
             Vector2D{500.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Pause", 
             [this]() { togglePause(); }
         );
-        m_pauseButton->setColors({65, 65, 80, 255}, {85, 85, 105, 255}, {255, 255, 255, 255});
+        m_pauseButton->setColors(m_theme.buttonNormal, m_theme.buttonHover, {255, 255, 255, 255});
     }
 
     void togglePause() {
@@ -133,30 +152,32 @@ private:
                 Vector2D{500.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Pause", 
                 [this]() { togglePause(); }
             );
-            m_pauseButton->setColors({65, 65, 80, 255}, {85, 85, 105, 255}, {255, 255, 255, 255}); 
+            m_pauseButton->setColors(m_theme.buttonNormal, m_theme.buttonHover, {255, 255, 255, 255}); 
         }
     }
 
-public:
-    explicit ChessGameScreen(ScreenManager& manager, kungfu::GameConfig config = kungfu::GameConfig{}) 
-        : IScreen(manager), m_config(config) 
-    {
+    void initializeScreen() {
+        m_theme.background = Color{18, 19, 23, 255}; 
+        m_theme.titleText = Color{240, 200, 80, 255};
+        m_theme.buttonNormal = Color{35, 37, 45, 255};
+        m_theme.buttonHover = Color{48, 120, 192, 255};
+        m_theme.border = Color{55, 58, 70, 255};
+        m_theme.bodyText = Color{210, 215, 225, 255};
+
         resetGame();
 
-        // אתחול כפתורי ה-Header העליון
         m_sidebarRestartButton = std::make_unique<Button>(
             Vector2D{660.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Restart", 
             [this]() { resetGame(); }
         );
-        m_sidebarRestartButton->setColors({55, 85, 115, 255}, {70, 105, 140, 255}, {255, 255, 255, 255});
+        m_sidebarRestartButton->setColors({48, 120, 192, 255}, {60, 140, 220, 255}, {255, 255, 255, 255});
 
         m_sidebarMenuButton = std::make_unique<Button>(
             Vector2D{820.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Quit Menu", 
             [this]() { m_screenManager.popScreen(); }
         );
-        m_sidebarMenuButton->setColors({110, 50, 50, 255}, {140, 65, 65, 255}, {255, 255, 255, 255});
+        m_sidebarMenuButton->setColors({180, 50, 65, 255}, {210, 65, 80, 255}, {255, 255, 255, 255});
 
-        // כפתורי סוף המשחק (ממורכזים מעל הלוח בסיום)
         m_rematchButton = std::make_unique<Button>(
             Vector2D{220.0f, 540.0f}, Vector2D{160.0f, 50.0f}, "Rematch", 
             [this]() { resetGame(); }
@@ -170,66 +191,53 @@ public:
         m_menuButton->setColors({50, 50, 60, 255}, {70, 70, 85, 255}, {255, 255, 255, 255});      
     }
 
-    void onEnter() override {
-        std::cout << "Chess Game Screen Activated!" << std::endl;
-    }
-
-    void onExit() override {
-        std::cout << "Chess Game Screen Deactivated!" << std::endl;
-    }
-
-    void update(float deltaTime) override {
-        m_pauseButton->update(deltaTime);
-        m_sidebarRestartButton->update(deltaTime);
-        m_sidebarMenuButton->update(deltaTime);
-
-        if (m_isPaused) {
-            return;
-        }
-
-        int ms = static_cast<int>(deltaTime * 1000.0f);
-        m_gameEngine->wait(ms);
-
-        if (m_gameEngine->isGameOver()) {
-            m_rematchButton->update(deltaTime);
-            m_menuButton->update(deltaTime);
-        }
-    }
-
-    void draw(IRenderer& renderer) override {
-        // צבע רקע כהה ונקי על כל שטח המרחב הלוגי
-        renderer.clear({20, 20, 25, 255});
+protected:
+    void drawContent(IRenderer& renderer) override {
+        Color lightTile{238, 238, 210, 255};       
+        Color darkTile{118, 150, 86, 255};         
+        Color boardFrameBg{35, 36, 43, 255};       
+        Color boardFrameBorder{65, 68, 85, 255};   
+        
+        Color hoverBorderColor{0, 229, 255, 200};  
+        Color selectedTileColor{244, 246, 128, 110}; 
+        Color selectedBorderColor{244, 246, 128, 255};
 
         auto board = m_gameEngine->getBoard();
         int rows = board->rows();
         int cols = board->cols();
         
-        float cellWidth = m_boardRangeX / cols;   // 100.0f
-        float cellHeight = m_boardRangeY / rows; // 100.0f
+        float cellWidth = m_boardRangeX / cols;   
+        float cellHeight = m_boardRangeY / rows; 
 
-        // --- 1. ציור לוח המשחק (ממורכז אנכית y=100) ---
+        renderer.drawRectangle({m_boardStartX - 8.0f, m_boardStartY - 8.0f}, 
+                               {m_boardRangeX + 16.0f, m_boardRangeY + 16.0f}, 
+                               boardFrameBg, true);
+        renderer.drawRectangle({m_boardStartX - 8.0f, m_boardStartY - 8.0f}, 
+                               {m_boardRangeX + 16.0f, m_boardRangeY + 16.0f}, 
+                               boardFrameBorder, false);
+
         for (int r = 0; r < rows; ++r) {
             for (int c = 0; c < cols; ++c) {
                 Vector2D pos{m_boardStartX + c * cellWidth, m_boardStartY + r * cellHeight};
                 Vector2D size{cellWidth, cellHeight};
                 
-                Color cellColor = ((r + c) % 2 == 0) 
-                    ? Color{240, 217, 181, 255}
-                    : Color{181, 136, 99, 255};
-                
-                renderer.drawRectangle(pos, size, cellColor, true);
+                Color tileColor = ((r + c) % 2 == 0) ? lightTile : darkTile;
+                renderer.drawRectangle(pos, size, tileColor, true);
+
+                if (m_hoveredTile.isValid() && m_hoveredTile.row == r && m_hoveredTile.col == c) {
+                    renderer.drawRectangle({pos.x + 1.0f, pos.y + 1.0f}, {size.x - 2.0f, size.y - 2.0f}, hoverBorderColor, false);
+                }
             }
         }
 
-        // --- 2. סימון משבצת נבחרת ---
         auto selectedOpt = m_controller->selectedPosition();
         if (selectedOpt.has_value() && !m_isPaused && !m_gameEngine->isGameOver()) {
             Vector2D pos{selectedOpt->col() * cellWidth, m_boardStartY + selectedOpt->row() * cellHeight};
             Vector2D size{cellWidth, cellHeight};
-            renderer.drawRectangle(pos, size, {255, 255, 0, 80}, true);
+            renderer.drawRectangle(pos, size, selectedTileColor, true);
+            renderer.drawRectangle(pos, size, selectedBorderColor, false);
         }
 
-        // --- 3. בניית Snapshot וציור כל הכלים ---
         auto snapshot = kungfu::view::SnapshotBuilder::build(
             *board,
             m_gameEngine->getArbiter(),
@@ -249,10 +257,29 @@ public:
             float animatedX = pieceSnap.pixelX;
             float animatedY = m_boardStartY + pieceSnap.pixelY;
             
+            if (selectedOpt.has_value() && 
+                pieceSnap.logicalPosition.row() == selectedOpt->row() && 
+                pieceSnap.logicalPosition.col() == selectedOpt->col()) {
+                
+                if (m_isHovering) {
+                    float floatOffset = 25.0f + std::sin(m_selectedPieceAnim.jumpTimer * 5.0f) * 6.0f;
+                    animatedY -= floatOffset;
+                } 
+                else if (m_selectedPieceAnim.isJumping) {
+                    float bounceOffset = std::abs(std::sin(m_selectedPieceAnim.jumpTimer * 12.0f)) * 22.0f;
+                    animatedY -= bounceOffset;
+
+                    if (m_selectedPieceAnim.jumpTimer * 12.0f >= 3.14159f) {
+                        m_selectedPieceAnim.isJumping = false;
+                    }
+                }
+            }
+
             Vector2D spritePos{animatedX, animatedY};
             Vector2D spriteSize{cellWidth, cellHeight};
 
-            renderer.drawSprite(assetId, spritePos, spriteSize);
+            float padding = cellWidth * 0.10f;
+            renderer.drawSprite(assetId, {spritePos.x + padding, spritePos.y + padding}, {spriteSize.x - (padding * 2), spriteSize.y - (padding * 2)});
 
             if (pieceSnap.cooldownProgress > 0.0f) {
                 Vector2D center{animatedX + cellWidth / 2.0f, animatedY + cellHeight / 2.0f};
@@ -262,7 +289,6 @@ public:
             positionToAnimatedPixel[positionKey(pieceSnap.logicalPosition, cols)] = spritePos;
         }
 
-        // --- 4. ציור חיווי ויזואלי של מהלכים מתוכננים מראש (Premoves) ---
         if (!m_isPaused && !m_gameEngine->isGameOver()) {
             const auto& premoveQueue = m_gameEngine->getPremoveQueue();
             for (const auto& entry : premoveQueue.entries()) {
@@ -273,8 +299,11 @@ public:
                 float destX = to.col() * cellWidth;
                 float destY = m_boardStartY + to.row() * cellHeight;
 
-                renderer.drawRectangle({destX, destY}, {cellWidth, cellHeight}, {0, 120, 255, 45}, true);   
-                renderer.drawRectangle({destX, destY}, {cellWidth, cellHeight}, {0, 120, 255, 180}, false);  
+                Color premoveColor{255, 107, 107, 70};       
+                Color premoveBorderColor{255, 107, 107, 200};
+
+                renderer.drawRectangle({destX, destY}, {cellWidth, cellHeight}, premoveColor, true);   
+                renderer.drawRectangle({destX, destY}, {cellWidth, cellHeight}, premoveBorderColor, false);  
 
                 Vector2D startPt{0.0f, 0.0f};
                 auto it = positionToAnimatedPixel.find(positionKey(piece->position(), cols));
@@ -287,28 +316,24 @@ public:
                 }
 
                 Vector2D endPt{destX + cellWidth / 2.0f, destY + cellHeight / 2.0f};
-                renderer.drawLine(startPt, endPt, {0, 120, 255, 180}, 3.0f);
+                renderer.drawLine(startPt, endPt, premoveBorderColor, 3.0f);
             }
         }
 
-        // --- 5. סרגל עליון (Top Header Bar): כותרת משחק ולחצני בקרה קבועים ---
-        renderer.drawRectangle({0.0f, 0.0f}, {1000.0f, 95.0f}, {25, 25, 30, 255}, true);
-        renderer.drawLine({0.0f, 95.0f}, {1000.0f, 95.0f}, {60, 60, 75, 255}, 2.0f);
+        renderer.drawRectangle({0.0f, 0.0f}, {1000.0f, 95.0f}, m_theme.background, true);
+        renderer.drawLine({0.0f, 95.0f}, {1000.0f, 95.0f}, m_theme.border, 2.0f);
 
-        renderer.drawText("KUNG-FU CHESS", {30.0f, 60.0f}, 24, {240, 200, 80, 255});
+        renderer.drawText("KUNG-FU CHESS", {30.0f, 60.0f}, 24, m_theme.titleText);
 
-        // רינדור כפתורי השליטה ב-Header (תמיד נגישים ללחיצה)
         m_pauseButton->draw(renderer);
         m_sidebarRestartButton->draw(renderer);
         m_sidebarMenuButton->draw(renderer);
 
-        // --- 6. סרגל ימני: שתי טבלאות מופרדות להיסטוריית המהלכים של כל שחקן ---
-        renderer.drawRectangle({800.0f, 100.0f}, {200.0f, 800.0f}, {25, 25, 35, 255}, true);
-        renderer.drawLine({800.0f, 100.0f}, {800.0f, 900.0f}, {60, 60, 75, 255}, 2.0f);
+        renderer.drawRectangle({800.0f, 100.0f}, {200.0f, 800.0f}, m_theme.background, true);
+        renderer.drawLine({800.0f, 100.0f}, {800.0f, 900.0f}, m_theme.border, 2.0f);
 
-        // א. טבלת מהלכי שחקן לבן (White Player Moves)
         renderer.drawRectangle({810.0f, 110.0f}, {180.0f, 360.0f}, {30, 30, 40, 255}, true);
-        renderer.drawRectangle({810.0f, 110.0f}, {180.0f, 360.0f}, {70, 70, 85, 255}, false);
+        renderer.drawRectangle({810.0f, 110.0f}, {180.0f, 360.0f}, m_theme.border, false);
         renderer.drawText("WHITE MOVES", {825.0f, 145.0f}, 13, {255, 255, 255, 255});
         renderer.drawLine({815.0f, 160.0f}, {985.0f, 160.0f}, {50, 50, 65, 255}, 1.0f);
 
@@ -324,9 +349,8 @@ public:
             whiteLogY += 35.0f;
         }
 
-        // ב. טבלת מהלכי שחקן שחור (Black Player Moves)
         renderer.drawRectangle({810.0f, 490.0f}, {180.0f, 360.0f}, {30, 30, 40, 255}, true);
-        renderer.drawRectangle({810.0f, 490.0f}, {180.0f, 360.0f}, {70, 70, 85, 255}, false);
+        renderer.drawRectangle({810.0f, 490.0f}, {180.0f, 360.0f}, m_theme.border, false);
         renderer.drawText("BLACK MOVES", {825.0f, 525.0f}, 13, {160, 160, 175, 255});
         renderer.drawLine({815.0f, 540.0f}, {985.0f, 540.0f}, {50, 50, 65, 255}, 1.0f);
 
@@ -342,9 +366,8 @@ public:
             blackLogY += 35.0f;
         }
 
-        // --- 7. סרגל תחתון (Bottom Status Bar): ניקוד מפורט וחיווי תורות ---
-        renderer.drawRectangle({0.0f, 905.0f}, {1000.0f, 95.0f}, {25, 25, 30, 255}, true);
-        renderer.drawLine({0.0f, 905.0f}, {1000.0f, 905.0f}, {60, 60, 75, 255}, 2.0f);
+        renderer.drawRectangle({0.0f, 905.0f}, {1000.0f, 95.0f}, m_theme.background, true);
+        renderer.drawLine({0.0f, 905.0f}, {1000.0f, 905.0f}, m_theme.border, 2.0f);
 
         int whiteScore = calculatePlayerScore(kungfu::PlayerColor::White);
         int blackScore = calculatePlayerScore(kungfu::PlayerColor::Black);
@@ -368,28 +391,70 @@ public:
             }
         }
 
-        // --- 8. מודל מסך השהיה (Pause Modal) ---
         if (m_isPaused && !snapshot.isGameOver) {
             renderer.drawRectangle({m_boardStartX, m_boardStartY}, {m_boardRangeX, m_boardRangeY}, {15, 15, 20, 180}, true);
-            
             renderer.drawRectangle({350.0f, 300.0f}, {300.0f, 150.0f}, {25, 25, 35, 240}, true);
             renderer.drawRectangle({350.0f, 300.0f}, {300.0f, 150.0f}, {80, 80, 100, 255}, false);
-            
             renderer.drawText("PAUSED", {445.0f, 370.0f}, 38, {240, 200, 80, 255});
             renderer.drawText("Press SPACE or Resume", {390.0f, 415.0f}, 14, {180, 180, 190, 255});
         }
 
-        // --- 9. מודל סיום משחק (Game Over Modal) ---
         if (snapshot.isGameOver) {
             renderer.drawRectangle({m_boardStartX, m_boardStartY}, {m_boardRangeX, m_boardRangeY}, {10, 10, 15, 150}, true);
-
             renderer.drawRectangle({150.0f, 350.0f}, {500.0f, 300.0f}, {20, 20, 25, 240}, true);
             renderer.drawRectangle({150.0f, 350.0f}, {500.0f, 300.0f}, {200, 60, 60, 255}, false); 
-            
             renderer.drawText("GAME OVER", {250.0f, 440.0f}, 50, {255, 60, 60, 255});
-            
             m_rematchButton->draw(renderer);
             m_menuButton->draw(renderer);
+        }
+    }
+
+public:
+    explicit ChessGameScreen(ScreenManager& manager, kungfu::GameConfig config = kungfu::GameConfig{}) 
+        : BaseScreen(manager, "Chess Match"), m_config(config) 
+    {
+        initializeScreen();
+    }
+
+    explicit ChessGameScreen(ScreenManager& manager, bool isSimultaneousMode) 
+        : BaseScreen(manager, "Chess Match") 
+    {
+        m_config.allowSimultaneousMovement = isSimultaneousMode;
+        initializeScreen();
+    }
+
+    void onEnter() override {
+        std::cout << "Chess Game Screen Activated!" << std::endl;
+    }
+
+    void onExit() override {
+        std::cout << "Chess Game Screen Deactivated!" << std::endl;
+    }
+
+    void update(float deltaTime) override {
+        m_pauseButton->update(deltaTime);
+        m_sidebarRestartButton->update(deltaTime);
+        m_sidebarMenuButton->update(deltaTime);
+
+        m_totalTime += deltaTime;
+
+        if (m_isPaused) {
+            return;
+        }
+
+        int ms = static_cast<int>(deltaTime * 1000.0f);
+        m_gameEngine->wait(ms);
+
+        if (m_gameEngine->isGameOver()) {
+            m_rematchButton->update(deltaTime);
+            m_menuButton->update(deltaTime);
+        }
+
+        auto selectedOpt = m_controller->selectedPosition();
+        if (selectedOpt.has_value() && (m_selectedPieceAnim.isJumping || m_isHovering)) {
+            m_selectedPieceAnim.jumpTimer += deltaTime;
+        } else {
+            m_selectedPieceAnim.jumpTimer = 0.0f;
         }
     }
 
@@ -397,7 +462,8 @@ public:
         for (const auto& event : events) {
             if (event.type == InputEvent::Type::Mouse) {
                 const auto& mouse = event.mouse;
-                
+                m_mousePos = { mouse.logicalX, mouse.logicalY };
+
                 m_pauseButton->handleInput(mouse);
                 m_sidebarRestartButton->handleInput(mouse);
                 m_sidebarMenuButton->handleInput(mouse);
@@ -406,48 +472,98 @@ public:
                     m_rematchButton->handleInput(mouse);
                     m_menuButton->handleInput(mouse);
                 } else if (!m_isPaused) {
-                    // ביצוע תרגום קלט ישיר ומסונכרן לחלוטין מתוך הטווח הלוגי הקבוע 1000x1000
                     if (mouse.logicalX >= m_boardStartX && mouse.logicalX < m_boardStartX + m_boardRangeX &&
                         mouse.logicalY >= m_boardStartY && mouse.logicalY < m_boardStartY + m_boardRangeY) {
                         
-                        if (mouse.action == MouseEvent::Action::Press && mouse.button == MouseButton::Left) {
-                            float boardClickX = mouse.logicalX;
-                            float boardClickY = mouse.logicalY - m_boardStartY;
+                        float boardClickX = mouse.logicalX;
+                        float boardClickY = mouse.logicalY - m_boardStartY;
 
-                            int col = static_cast<int>(boardClickX / 100.0f);
-                            int row = static_cast<int>(boardClickY / 100.0f);
+                        int col = static_cast<int>(boardClickX / 100.0f);
+                        int row = static_cast<int>(boardClickY / 100.0f);
 
-                            if (col >= 0 && col < 8 && row >= 0 && row < 8) {
-                                // המרה וירטואלית יציבה מול Controller המוגדר עם Cell Size של 100
-                                int virtualX = col * 100 + 50;
-                                int virtualY = row * 100 + 50;
-                                
-                                // שמירת השחקן הנוכחי לפני הלחיצה כדי להחליט לאיזה לוג לשייך את המהלך
-                                auto activeColor = m_gameEngine->currentTurn();
-                                
-                                auto result = m_controller->click(virtualX, virtualY);
-                                
-                                if (result.actionTaken && !result.description.empty()) {
-                                    std::string logText = result.description;
-                                    // ניקוי כיתובים חוזרים כדי לחסוך מקום בטבלאות
-                                    if (logText.rfind("Move requested: ", 0) == 0) {
-                                        logText = logText.substr(16);
+                        if (col >= 0 && col < 8 && row >= 0 && row < 8) {
+                            m_hoveredTile = BoardPos{row, col};
+
+                            if (mouse.action == MouseEvent::Action::Press && mouse.button == MouseButton::Left) {
+                                BoardPos clickedTile{row, col};
+                                float timeSinceLastClick = m_totalTime - m_lastClickTime;
+
+                                if (clickedTile == m_lastClickedTile && timeSinceLastClick < 0.48f && timeSinceLastClick > 0.001f) {
+                                    m_lastClickTime = 0.0f;
+                                    m_lastClickedTile = BoardPos{-1, -1};
+
+                                    auto selectedOpt = m_controller->selectedPosition();
+                                    
+                                    if (!selectedOpt.has_value()) {
+                                        int virtualX = col * 100 + 50;
+                                        int virtualY = row * 100 + 50;
+                                        m_controller->click(virtualX, virtualY);
                                     }
 
-                                    if (activeColor == kungfu::PlayerColor::White) {
-                                        m_whiteHistory.push_back(logText);
-                                        if (m_whiteHistory.size() > 8) { // שמירה על 8 מהלכים אחרונים בטבלה
-                                            m_whiteHistory.erase(m_whiteHistory.begin());
+                                    m_isHovering = !m_isHovering; 
+                                    m_selectedPieceAnim.isJumping = false;
+                                    m_selectedPieceAnim.jumpTimer = 0.0f;
+                                } 
+                                else {
+                                    m_lastClickTime = m_totalTime;
+                                    m_lastClickedTile = clickedTile;
+
+                                    int virtualX = col * 100 + 50;
+                                    int virtualY = row * 100 + 50;
+                                    
+                                    // זיהוי צבע הכלי שזז על פי הלוח הקיים לפני ביצוע הלחיצה (פתרון באג טבלת המהלכים)
+                                    auto activeColor = m_gameEngine->currentTurn();
+                                    auto selectedBefore = m_controller->selectedPosition();
+                                    
+                                    if (selectedBefore.has_value()) {
+                                        auto board = m_gameEngine->getBoard();
+                                        if (board) {
+                                            for (const auto& piece : board->pieces()) {
+                                                if (piece && piece->position() == selectedBefore.value()) {
+                                                    activeColor = piece->color();
+                                                    break;
+                                                }
+                                            }
                                         }
-                                    } else {
-                                        m_blackHistory.push_back(logText);
-                                        if (m_blackHistory.size() > 8) {
-                                            m_blackHistory.erase(m_blackHistory.begin());
+                                    }
+
+                                    auto result = m_controller->click(virtualX, virtualY);
+                                    auto selectedAfter = m_controller->selectedPosition();
+
+                                    if (!selectedBefore.has_value() && selectedAfter.has_value()) {
+                                        m_selectedPieceAnim.isJumping = true;
+                                        m_isHovering = false;
+                                        m_selectedPieceAnim.jumpTimer = 0.0f;
+                                    }
+                                    else if (selectedBefore.has_value() && !selectedAfter.has_value()) {
+                                        m_selectedPieceAnim.isJumping = false;
+                                        m_isHovering = false;
+                                        m_selectedPieceAnim.jumpTimer = 0.0f;
+                                    }
+
+                                    if (result.actionTaken && !result.description.empty()) {
+                                        std::string logText = result.description;
+                                        if (logText.rfind("Move requested: ", 0) == 0) {
+                                            logText = logText.substr(16);
+                                        }
+
+                                        if (activeColor == kungfu::PlayerColor::White) {
+                                            m_whiteHistory.push_back(logText);
+                                            if (m_whiteHistory.size() > 8) {
+                                                m_whiteHistory.erase(m_whiteHistory.begin());
+                                            }
+                                        } else {
+                                            m_blackHistory.push_back(logText);
+                                            if (m_blackHistory.size() > 8) {
+                                                m_blackHistory.erase(m_blackHistory.begin());
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                    } else {
+                        m_hoveredTile = BoardPos{-1, -1};
                     }
                 }
             }

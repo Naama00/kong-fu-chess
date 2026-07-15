@@ -4,7 +4,7 @@
 #include "ui/framework/ScreenManager.hpp"
 #include "ui/framework/IRenderer.hpp"
 #include "ui/framework/IInputTranslator.hpp"
-#include "core/view/screens/MainMenuScreen.hpp"
+#include "core/view/screens/StartScreen.hpp"
 #include "graphics_impl/img.hpp"
 #include <chrono>
 #include <memory>
@@ -56,14 +56,11 @@ int main() {
         int windowY = (screenHeight - windowHeight) / 2;
         cv::moveWindow(windowName, windowX, windowY);
 
-        // 4. טעינת מסך הפתיחה כמסך הראשי
-        screenManager.changeScreen(std::make_unique<MainMenuScreen>(screenManager));
+        // 4. טעינת מסך הפתיחה החדש כמסך הראשי של האפליקציה (במקום MainMenuScreen)
+        // הערה: StartScreen משתמש כעת בממשק הבנאי המעודכן המעביר את ה-ScreenManager
+        screenManager.changeScreen(std::make_unique<StartScreen>(screenManager));
 
         // טעינת תמונות הכלים לתוך ה-AssetManager של ה-Renderer.
-        // הערה: השורות האלה עדיין תלויות ב-ImgTextureAsset הקונקרטי - זה
-        // סביר לחלוטין ב-composition root (טעינת נכסים היא תמיד ספציפית
-        // ל-backend), אך אם רוצים גם את זה אגנוסטי, אפשר לעטוף בפונקציה
-        // כמו loadPieceAssets(AssetManager&) שמוגדרת לכל backend בנפרד.
         imgRenderer.getAssetManager().loadAsset<ImgTextureAsset>("wK", "assets/wK.png");
         imgRenderer.getAssetManager().loadAsset<ImgTextureAsset>("wQ", "assets/wQ.png");
         imgRenderer.getAssetManager().loadAsset<ImgTextureAsset>("wR", "assets/wR.png");
@@ -83,8 +80,6 @@ int main() {
         cv::waitKey(1); // עדיין נחוץ פעם אחת - "מעוררת" את חלון OpenCV כדי שיצויר
 
         // 5. לולאת המשחק הראשית (Main Game Loop) בזמן אמת.
-        //    שימו לב: מנקודה זו והלאה, שום קריאה ל-cv:: לא מופיעה יותר -
-        //    כל התקשורת עם ה-backend הגרפי עוברת דרך renderer/inputTranslator.
         auto previousTime = std::chrono::high_resolution_clock::now();
         bool running = true;
 
