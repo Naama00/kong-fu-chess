@@ -9,6 +9,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(OpenCV REQUIRED)
 # -----------------------------
 
+# -------- Find SFML 3 --------
+# איתור SFML בגרסה 3 ומעלה עם שמות הרכיבים המעודכנים באותיות גדולות
+find_package(SFML 3 COMPONENTS Graphics Window System REQUIRED)
+# ---------------------------
+
 # -------- Catch2 via FetchContent --------
 include(FetchContent)
 FetchContent_Declare(
@@ -20,10 +25,7 @@ FetchContent_MakeAvailable(Catch2)
 # -----------------------------------------
 
 # ── Core game library ─────────────────────────────────────────────────────────
-# All headers and sources now live under src/core/<module>/
-# The graphics glue (Img) lives under src/graphics_impl/
 add_library(kungfu_engine
-    src/graphics_impl/img.cpp
     src/core/common/Position.cpp
     src/core/board/Piece.cpp
     src/core/board/Board.cpp
@@ -43,9 +45,7 @@ add_library(kungfu_engine
     src/core/view/SnapshotBuilder.cpp
 )
 
-# Single include root: everything is resolved relative to src/
-target_include_directories(kungfu_engine PUBLIC src ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(kungfu_engine PUBLIC ${OpenCV_LIBS})
+target_include_directories(kungfu_engine PUBLIC src)
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 add_executable(kungfu_tests
@@ -69,22 +69,43 @@ target_include_directories(kungfu_tests PRIVATE src)
 enable_testing()
 add_test(NAME unit_tests COMMAND kungfu_tests)
 
-# ── Main executable ───────────────────────────────────────────────────────────
-add_executable(kungfu_game src/main.cpp)
-target_link_libraries(kungfu_game PRIVATE kungfu_engine)
-target_include_directories(kungfu_game PRIVATE src)
+# ── Executable 1: OpenCV Game Version ─────────────────────────────────────────
+add_executable(kungfu_game_opencv 
+    src/main_opencv.cpp 
+    src/graphics_impl/img.cpp
+)
+target_include_directories(kungfu_game_opencv PRIVATE src ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(kungfu_game_opencv PRIVATE kungfu_engine ${OpenCV_LIBS})
 
-# Auto-copy OpenCV DLL next to the exe on Windows.
-# OpenCV_DIR resolves to <opencv_root>/build, so the Release DLL lives at
-# <opencv_root>/build/x64/vc16/bin/opencv_world*.dll
+# ── Executable 2: SFML Game Version ───────────────────────────────────────────
+add_executable(kungfu_game_sfml 
+    src/main_sfml.cpp
+)
+target_include_directories(kungfu_game_sfml PRIVATE src)
+# קישור באמצעות ה-Namespaces המעודכנים של SFML 3
+target_link_libraries(kungfu_game_sfml PRIVATE kungfu_engine SFML::Graphics SFML::Window SFML::System)
+
+# ── Windows Post-Build DLL Auto-Copy ─────────────────────────────────────────
 if(WIN32)
     file(GLOB OPENCV_DLLS "${OpenCV_DIR}/x64/vc16/bin/opencv_world*.dll")
     foreach(DLL ${OPENCV_DLLS})
-        add_custom_command(TARGET kungfu_game POST_BUILD
+        add_custom_command(TARGET kungfu_game_opencv POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${DLL}"
-                $<TARGET_FILE_DIR:kungfu_game>
-            COMMENT "Copying ${DLL} to output directory"
+                $<TARGET_FILE_DIR:kungfu_game_opencv>
+            COMMENT "Copying OpenCV DLL: ${DLL} to OpenCV build folder"
         )
     endforeach()
+
+    if(SFML_DIR)
+        file(GLOB SFML_DLLS "${SFML_DIR}/../../bin/sfml-*.dll" "${SFML_DIR}/bin/sfml-*.dll")
+        foreach(DLL ${SFML_DLLS})
+            add_custom_command(TARGET kungfu_game_sfml POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DLL}"
+                    $<TARGET_FILE_DIR:kungfu_game_sfml>
+                COMMENT "Copying SFML DLL: ${DLL} to SFML build folder"
+            )
+        endforeach()
+    endif()
 endif()
