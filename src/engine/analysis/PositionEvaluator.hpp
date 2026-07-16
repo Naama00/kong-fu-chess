@@ -1,12 +1,12 @@
-// core/rules/MaterialEvaluator.hpp
+// engine/analysis/PositionEvaluator.hpp
 #pragma once
-#include "core/board/IBoard.hpp"
-#include "core/realtime/RealTimeArbiter.hpp"
-#include "core/common/Enums.hpp"
+#include "engine/board/IBoard.hpp"
+#include "engine/realtime/RealTimeArbiter.hpp"
+#include "engine/common/Enums.hpp"
 
 namespace kungfu {
 
-class MaterialEvaluator {
+class PositionEvaluator {
 public:
     static int getPieceValue(PieceType type) noexcept {
         switch (type) {
