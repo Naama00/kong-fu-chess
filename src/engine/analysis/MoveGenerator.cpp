@@ -1,3 +1,4 @@
+// engine/analysis/MoveGenerator.cpp
 #include "engine/analysis/MoveGenerator.hpp"
 
 #include <algorithm>
@@ -25,9 +26,6 @@ std::shared_ptr<Piece> createPieceFromSnapshot(const view::PieceSnapshot& pieceS
 std::shared_ptr<Board> MoveGenerator::buildBoardFromSnapshot(const view::GameSnapshot& snapshot) const {
     auto board = std::make_shared<Board>(snapshot.boardRows, snapshot.boardCols);
     for (const auto& pieceSnapshot : snapshot.pieces) {
-        if (pieceSnapshot.type == PieceType::King && pieceSnapshot.color == PlayerColor::White) {
-            // no-op placeholder to keep the function explicit for the current implementation
-        }
         auto piece = createPieceFromSnapshot(pieceSnapshot);
         board->placePiece(piece, pieceSnapshot.logicalPosition);
     }
@@ -48,7 +46,6 @@ std::vector<IMoveGenerator::MoveCandidate> MoveGenerator::generateForPiece(
         return result;
     }
 
-    const auto& piece = sourcePieceOpt.value();
     RuleEngine engine(board);
     for (int row = 0; row < snapshot.boardRows; ++row) {
         for (int col = 0; col < snapshot.boardCols; ++col) {
@@ -73,18 +70,30 @@ std::vector<IMoveGenerator::MoveCandidate> MoveGenerator::generateForPlayer(
     const view::GameSnapshot& snapshot,
     PlayerColor playerColor) const {
     std::vector<MoveCandidate> result;
+    
+    // בונים את הלוח ואת ה-RuleEngine פעם אחת בלבד!
     auto board = buildBoardFromSnapshot(snapshot);
     if (!board) {
         return result;
     }
 
+    RuleEngine engine(board);
     const auto pieces = board->pieces();
+    
     for (const auto& piece : pieces) {
         if (!piece || piece->color() != playerColor) {
             continue;
         }
-        auto pieceMoves = generateForPiece(snapshot, piece->position());
-        result.insert(result.end(), pieceMoves.begin(), pieceMoves.end());
+        
+        // מייצרים מהלכים ישירות עבור הכלי מבלי לקרוא ל-generateForPiece (שמיועדת לקריאות בודדות מבחוץ)
+        for (int row = 0; row < snapshot.boardRows; ++row) {
+            for (int col = 0; col < snapshot.boardCols; ++col) {
+                Position target(row, col);
+                if (engine.validateMove(piece->position(), target).isValid) {
+                    result.push_back({piece->position(), target});
+                }
+            }
+        }
     }
 
     std::sort(result.begin(), result.end(), [](const MoveCandidate& lhs, const MoveCandidate& rhs) {

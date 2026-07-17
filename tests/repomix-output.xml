@@ -269,7 +269,11 @@ TEST_CASE("Requests while a piece is on cooldown are rejected", "[engine][premov
 
     auto board = kungfu::BoardParser::parse(boardStr);
     auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
-    kungfu::GameEngine game(board, ruleEngine);
+    
+    // אנו מכבים פרה-מובס במפורש כדי לוודא שפעולות רגילות נדחות בזמן צינון
+    kungfu::GameConfig cfg;
+    cfg.enablePremoves = false;
+    kungfu::GameEngine game(board, ruleEngine, cfg);
 
     auto firstMove = game.requestMove(kungfu::Position(0, 0), kungfu::Position(0, 1));
     REQUIRE(firstMove.isAccepted);

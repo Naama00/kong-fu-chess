@@ -1204,9 +1204,13 @@ MoveResult GameEngine::requestMove(const Position& from, const Position& to) {
     auto piece = sourcePieceOpt.value();
 
     // 2. שאילתת מצב פיזיקלי דרך ה-Arbiter בלבד (DIP)
-    if (arbiter_.isOnCooldown(piece, currentTimeMs_)) {
-        return {false, "piece_on_cooldown"};
+if (arbiter_.isOnCooldown(piece, currentTimeMs_)) {
+    // אם המשחק במצב סימולטני ופרה-מובס מאופשרים, נאפשר לרשום פרה-מוב גם בזמן שהכלי בצינון
+    if (config_.allowSimultaneousMovement && config_.enablePremoves && from != to) {
+        return handlePremoveRegistration(piece, from, to);
     }
+    return {false, "piece_on_cooldown"};
+}
 
     if (arbiter_.isPieceBusy(piece, currentTimeMs_)) {
         // מניעת רישום פרה-מוב של קפיצה עצמית (מניעת קפיצה אוטומטית לאחר צינון)
@@ -6149,6 +6153,8 @@ private:
     kungfu::GameConfig m_config;
     std::shared_ptr<ISoundPlayer> m_soundPlayer;
     bool m_isPaused = false;
+    bool m_isAiOpponent = false;    // שדה חדש למעקב אחר משחק מול ה-AI
+    float m_aiDecisionTimer = 1.0f; // טיימר אקראי לפעולת ה-AI במצב סימולטני
 
     // היסטוריית מהלכים של כל שחקן
     std::vector<std::string> m_whiteHistory;
@@ -6192,13 +6198,13 @@ private:
 
     BoardPos m_hoveredTile{-1, -1};
     float m_pauseTransitionProgress = 0.0f;
-    
+
     // רכיבי UI מודולריים
     ParticleSystem m_particleSystem;
     SidebarView m_sidebarView;
     HeaderView m_headerView;
     FooterView m_footerView;
-    BoardView m_boardView; 
+    BoardView m_boardView;
 
     int getPieceValue(kungfu::PieceType type) const
     {
@@ -6282,7 +6288,16 @@ private:
 
         m_gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine, m_config);
         m_humanPlayer = std::make_shared<kungfu::HumanPlayer>(m_gameEngine);
-        m_aiPlayer = std::make_shared<kungfu::AIPlayer>(kungfu::PlayerColor::Black);
+
+        // יצירת ה-AI רק במידה והשחקן בחר לשחק מול המחשב
+        if (m_isAiOpponent)
+        {
+            m_aiPlayer = std::make_shared<kungfu::AIPlayer>(kungfu::PlayerColor::Black);
+        }
+        else
+        {
+            m_aiPlayer = nullptr;
+        }
 
         m_humanPlayer->setCellSize(100);
 
@@ -6456,7 +6471,7 @@ protected:
         int cols = board->cols();
 
         auto selectedOpt = m_humanPlayer->selectedPosition();
-        
+
         auto snapshot = kungfu::view::SnapshotBuilder::build(
             *board,
             m_gameEngine->getArbiter(),
@@ -6473,26 +6488,28 @@ protected:
 
         m_particleSystem.draw(renderer);
 
-        m_headerView.draw(renderer, "KUNG-FU CHESS", m_theme.background, m_theme.border, m_theme.titleText, 
+        m_headerView.draw(renderer, "KUNG-FU CHESS", m_theme.background, m_theme.border, m_theme.titleText,
                           *m_pauseButton, *m_sidebarRestartButton, *m_sidebarMenuButton);
-        
+
         m_sidebarView.draw(renderer, m_whiteHistory, m_blackHistory, m_theme.background, m_theme.border);
-        
+
         int whiteScore = calculatePlayerScore(kungfu::PlayerColor::White);
         int blackScore = calculatePlayerScore(kungfu::PlayerColor::Black);
-        m_footerView.draw(renderer, whiteScore, blackScore, m_gameEngine->isGameOver(), m_isPaused, 
-                          m_config.allowSimultaneousMovement, m_gameEngine->currentTurn(), 
+        m_footerView.draw(renderer, whiteScore, blackScore, m_gameEngine->isGameOver(), m_isPaused,
+                          m_config.allowSimultaneousMovement, m_gameEngine->currentTurn(),
                           m_theme.background, m_theme.border);
-        
+
         drawOverlays(renderer, snapshot);
     }
 
 public:
     explicit ChessGameScreen(ScreenManager &manager,
-                             kungfu::GameConfig config = kungfu::GameConfig{},
+                             bool isSimultaneousMode,
+                             bool isAiOpponent = false, // פרמטר חדש
                              std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>())
-        : BaseScreen(manager, "Chess Match"), m_config(config), m_soundPlayer(std::move(soundPlayer))
+        : BaseScreen(manager, "Chess Match"), m_isAiOpponent(isAiOpponent), m_soundPlayer(std::move(soundPlayer))
     {
+        m_config.allowSimultaneousMovement = isSimultaneousMode;
         if (!m_config.allowSimultaneousMovement)
         {
             m_config.cooldownDurationMs = 0;
@@ -6580,7 +6597,9 @@ public:
             m_menuButton->update(deltaTime);
         }
 
-        if (!m_isPaused && !m_gameEngine->isGameOver()) {
+        // --- ניהול וקבלת החלטות של ה-AI ---
+        if (!m_isPaused && !m_gameEngine->isGameOver() && m_isAiOpponent && m_aiPlayer)
+        {
             auto snapshot = kungfu::view::SnapshotBuilder::build(
                 *m_gameEngine->getBoard(),
                 m_gameEngine->getArbiter(),
@@ -6589,12 +6608,61 @@ public:
                 std::nullopt,
                 m_boardRangeX / 8);
 
-            if (m_gameEngine->currentTurn() == kungfu::PlayerColor::Black && m_aiPlayer) {
+            bool shouldAiMove = false;
+
+            if (!m_config.allowSimultaneousMovement)
+            {
+                // מצב קלאסי (תורות): ה-AI זז מיד ברגע שהתור עובר לשחור
+                if (m_gameEngine->currentTurn() == kungfu::PlayerColor::Black)
+                {
+                    shouldAiMove = true;
+                }
+            }
+            else
+            {
+                // מצב קונג-פו (זמן אמת): ה-AI פועל במרווחי זמן מדומים לקבלת החלטות
+                m_aiDecisionTimer -= deltaTime;
+                if (m_aiDecisionTimer <= 0.0f)
+                {
+                    shouldAiMove = true;
+                    // איפוס מחדש של הטיימר לזמן אקראי בין 1.0 ל-2.2 שניות (לדימוי שחקן אנושי)
+                    m_aiDecisionTimer = 1.0f + (static_cast<float>(std::rand()) / RAND_MAX) * 1.2f;
+                }
+            }
+
+            if (shouldAiMove)
+            {
                 auto aiRequests = m_aiPlayer->decideActions(snapshot);
-                if (!aiRequests.empty()) {
+                if (!aiRequests.empty())
+                {
                     auto aiResults = m_gameEngine->processActionRequests(aiRequests);
-                    if (!aiResults.empty() && aiResults.front().status == kungfu::ActionStatus::Accepted) {
-                        m_gameEngine->wait(1000);
+                    if (!aiResults.empty() && aiResults.front().status == kungfu::ActionStatus::Accepted)
+                    {
+
+                        // תרגום המהלך וכתיבתו להיסטוריה הצידית של שחור
+                        auto action = aiRequests.front().action;
+                        kungfu::PieceType pieceType = kungfu::PieceType::Pawn;
+                        auto pieceOpt = m_gameEngine->getBoard()->pieceAt(action.from);
+                        if (pieceOpt.has_value() && pieceOpt.value())
+                        {
+                            pieceType = pieceOpt.value()->type();
+                        }
+
+                        BoardPos fromPos{action.from.row(), action.from.col()};
+                        BoardPos toPos{action.to.row(), action.to.col()};
+                        std::string logText = getMoveNotationString(pieceType, fromPos, toPos);
+
+                        m_blackHistory.push_back(logText);
+                        if (m_blackHistory.size() > 8)
+                        {
+                            m_blackHistory.erase(m_blackHistory.begin());
+                        }
+
+                        // במצב תורות קלאסי בלבד: קידום הסימולציה ב-1000ms להשלמת ההגעה הפיזית ליעד
+                        if (!m_config.allowSimultaneousMovement)
+                        {
+                            m_gameEngine->wait(1000);
+                        }
                     }
                 }
             }
@@ -6648,6 +6716,18 @@ public:
                                 BoardPos clickedTile{row, col};
                                 float timeSinceLastClick = m_totalTime - m_lastClickTime;
 
+                                // --- הגנה ארכיטקטונית לחסימת קלט ---
+                                // אם המשחק מול ה-AI, והמשתמש מבצע קליק ראשון, נמנע ממנו לבחור בכלים של ה-AI (השחורים)
+                                auto selectedBefore = m_humanPlayer->selectedPosition();
+                                if (!selectedBefore.has_value() && m_isAiOpponent)
+                                {
+                                    auto pieceColor = m_gameEngine->getPieceColorAt(kungfu::Position(row, col));
+                                    if (pieceColor.has_value() && pieceColor.value() == kungfu::PlayerColor::Black)
+                                    {
+                                        continue; // מעבר ישיר לאירוע הבא - מניעת המשך העיבוד ב-Controller [1]
+                                    }
+                                }
+
                                 if (clickedTile == m_lastClickedTile && timeSinceLastClick < 0.48f && timeSinceLastClick > 0.001f)
                                 {
                                     m_lastClickTime = 0.0f;
@@ -6655,14 +6735,65 @@ public:
 
                                     auto selectedOpt = m_humanPlayer->selectedPosition();
 
-                                    if (!selectedOpt.has_value())
+                                    // אם כבר יש כלי מסומן, לחיצה כפולה עליו תבצע קפיצה על המקום במנוע המשחק
+                                    if (selectedOpt.has_value())
                                     {
+                                        auto pos = *selectedOpt;
+                                        auto moveResult = m_gameEngine->requestMove(pos, pos); // שליחת בקשת קפיצה (from == to)
+
+                                        if (moveResult.isAccepted)
+                                        {
+                                            // מציאת סוג הכלי לטובת רישום המהלך בהיסטוריית המהלכים
+                                            kungfu::PieceType pieceType = kungfu::PieceType::Pawn;
+                                            auto pieceOpt = m_gameEngine->getBoard()->pieceAt(pos);
+                                            if (pieceOpt.has_value() && pieceOpt.value())
+                                            {
+                                                pieceType = pieceOpt.value()->type();
+                                            }
+                                            else
+                                            {
+                                                auto transitOpt = m_gameEngine->getArbiter().getPieceInTransitAt(pos);
+                                                if (transitOpt.has_value() && transitOpt.value())
+                                                {
+                                                    pieceType = transitOpt.value()->type();
+                                                }
+                                            }
+
+                                            std::string logText = getMoveNotationString(pieceType, BoardPos{pos.row(), pos.col()}, BoardPos{pos.row(), pos.col()});
+
+                                            // זיהוי צבע הכלי שקפץ לצורך רישום בלוג המתאים
+                                            auto pieceColor = kungfu::PlayerColor::White;
+                                            auto transitOpt = m_gameEngine->getArbiter().getPieceInTransitAt(pos);
+                                            if (transitOpt.has_value() && transitOpt.value())
+                                            {
+                                                pieceColor = transitOpt.value()->color();
+                                            }
+
+                                            if (pieceColor == kungfu::PlayerColor::White)
+                                            {
+                                                m_whiteHistory.push_back(logText);
+                                                if (m_whiteHistory.size() > 8)
+                                                    m_whiteHistory.erase(m_whiteHistory.begin());
+                                            }
+                                            else
+                                            {
+                                                m_blackHistory.push_back(logText);
+                                                if (m_blackHistory.size() > 8)
+                                                    m_blackHistory.erase(m_blackHistory.begin());
+                                            }
+                                        }
+
+                                        m_humanPlayer->clearSelection(); // ביטול סימון הכלי לאחר הקפיצה
+                                    }
+                                    else
+                                    {
+                                        // אם אין כלי מסומן, נבצע לחיצה רגילה לצורך סימון ראשוני
                                         int virtualX = col * 100 + 50;
                                         int virtualY = row * 100 + 50;
                                         m_humanPlayer->handleClick(virtualX, virtualY);
                                     }
 
-                                    m_isHovering = !m_isHovering;
+                                    m_isHovering = false;
                                     m_selectedPieceAnim.isJumping = false;
                                     m_selectedPieceAnim.jumpTimer = 0.0f;
                                 }
@@ -6727,29 +6858,31 @@ public:
                                             selectedBefore,
                                             m_boardRangeX / 8);
 
-                                        auto requests = m_humanPlayer->decideActions(snapshot);
-                                        if (!requests.empty()) {
-                                            auto actionResults = m_gameEngine->processActionRequests(requests);
-                                            if (!actionResults.empty() && actionResults.front().status == kungfu::ActionStatus::Accepted) {
-                                                BoardPos fromPos{selectedBefore->row(), selectedBefore->col()};
-                                                BoardPos toPos{row, col};
-                                                std::string logText = getMoveNotationString(movingPieceType, fromPos, toPos);
+                                        auto requests = m_humanPlayer->decideActions(snapshot); // ניקוז הבקשה הממתינות כדי שלא תצטבר
 
-                                                if (activeColor == kungfu::PlayerColor::White)
+                                        // אנו בודקים האם המהלך התקבל בהצלחה ישירות מתוצאת הקליק המקורית
+                                        bool moveAccepted = (result.description.find("Move requested:") == 0);
+
+                                        if (moveAccepted)
+                                        {
+                                            BoardPos fromPos{selectedBefore->row(), selectedBefore->col()};
+                                            BoardPos toPos{row, col};
+                                            std::string logText = getMoveNotationString(movingPieceType, fromPos, toPos);
+
+                                            if (activeColor == kungfu::PlayerColor::White)
+                                            {
+                                                m_whiteHistory.push_back(logText);
+                                                if (m_whiteHistory.size() > 8)
                                                 {
-                                                    m_whiteHistory.push_back(logText);
-                                                    if (m_whiteHistory.size() > 8)
-                                                    {
-                                                        m_whiteHistory.erase(m_whiteHistory.begin());
-                                                    }
+                                                    m_whiteHistory.erase(m_whiteHistory.begin());
                                                 }
-                                                else
+                                            }
+                                            else
+                                            {
+                                                m_blackHistory.push_back(logText);
+                                                if (m_blackHistory.size() > 8)
                                                 {
-                                                    m_blackHistory.push_back(logText);
-                                                    if (m_blackHistory.size() > 8)
-                                                    {
-                                                        m_blackHistory.erase(m_blackHistory.begin());
-                                                    }
+                                                    m_blackHistory.erase(m_blackHistory.begin());
                                                 }
                                             }
                                         }
@@ -6807,18 +6940,33 @@ public:
         Classic       // שחמט רגיל
     };
 
+    enum class OpponentType
+    {
+        LocalPlayer, // שחקן מקומי (PvP)
+        AI           // מחשב (PvC)
+    };
+
 private:
     Vector2D m_mousePos{0.0f, 0.0f};
     GameMode m_selectedMode{GameMode::Simultaneous};
+    OpponentType m_selectedOpponent{OpponentType::AI}; // ברירת מחדל נגד המחשב
     std::shared_ptr<ISoundPlayer> m_soundPlayer;
+
     // הגדרות גיאומטריות של כפתורי הבחירה והפעולה
     const Vector2D m_btnSize{260.0f, 55.0f};
     const Vector2D m_modeBtnSize{125.0f, 45.0f};
 
-    const Vector2D m_simulModePos{365.0f, 380.0f};
-    const Vector2D m_classicModePos{500.0f, 380.0f};
-    const Vector2D m_playBtnPos{365.0f, 460.0f};
-    const Vector2D m_exitBtnPos{365.0f, 530.0f};
+    // מיקומי בחירת מצב משחק
+    const Vector2D m_simulModePos{365.0f, 350.0f};
+    const Vector2D m_classicModePos{500.0f, 350.0f};
+
+    // מיקומי בחירת יריב
+    const Vector2D m_pvpOpponentPos{365.0f, 450.0f};
+    const Vector2D m_aiOpponentPos{500.0f, 450.0f};
+
+    // מיקומי כפתורי שליטה ראשיים
+    const Vector2D m_playBtnPos{365.0f, 540.0f};
+    const Vector2D m_exitBtnPos{365.0f, 610.0f};
 
     void drawWelcomeMessage(IRenderer &renderer)
     {
@@ -6828,7 +6976,7 @@ private:
 
     void drawModeSelector(IRenderer &renderer)
     {
-        renderer.drawText("Select Game Mode:", {365.0f, 350.0f}, 16, m_theme.bodyText);
+        renderer.drawText("Select Game Mode:", {365.0f, 325.0f}, 16, m_theme.bodyText);
 
         bool simulHovered = isPointInRect(m_mousePos, m_simulModePos, m_modeBtnSize);
         bool classicHovered = isPointInRect(m_mousePos, m_classicModePos, m_modeBtnSize);
@@ -6848,6 +6996,28 @@ private:
         renderer.drawText("Classic", {m_classicModePos.x + 25.0f, m_classicModePos.y + 28.0f}, 14, m_theme.bodyText);
     }
 
+    void drawOpponentSelector(IRenderer &renderer)
+    {
+        renderer.drawText("Select Opponent:", {365.0f, 425.0f}, 16, m_theme.bodyText);
+
+        bool pvpHovered = isPointInRect(m_mousePos, m_pvpOpponentPos, m_modeBtnSize);
+        bool aiHovered = isPointInRect(m_mousePos, m_aiOpponentPos, m_modeBtnSize);
+
+        // כפתור מצב שחקן מקומי
+        bool isPvpActive = (m_selectedOpponent == OpponentType::LocalPlayer);
+        Color pvpColor = isPvpActive ? m_theme.buttonHover : (pvpHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
+        renderer.drawRectangle(m_pvpOpponentPos, m_modeBtnSize, pvpColor, true);
+        renderer.drawRectangle(m_pvpOpponentPos, m_modeBtnSize, m_theme.border, false);
+        renderer.drawText("Local PvP", {m_pvpOpponentPos.x + 20.0f, m_pvpOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
+
+        // כפתור מצב שחקן מול ה-AI
+        bool isAiActive = (m_selectedOpponent == OpponentType::AI);
+        Color aiColor = isAiActive ? m_theme.buttonHover : (aiHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
+        renderer.drawRectangle(m_aiOpponentPos, m_modeBtnSize, aiColor, true);
+        renderer.drawRectangle(m_aiOpponentPos, m_modeBtnSize, m_theme.border, false);
+        renderer.drawText("vs Computer", {m_aiOpponentPos.x + 13.0f, m_aiOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
+    }
+
     void drawMenuButtons(IRenderer &renderer)
     {
         bool playHovered = isPointInRect(m_mousePos, m_playBtnPos, m_btnSize);
@@ -6862,6 +7032,7 @@ protected:
     {
         drawWelcomeMessage(renderer);
         drawModeSelector(renderer);
+        drawOpponentSelector(renderer);
         drawMenuButtons(renderer);
     }
 
@@ -6869,13 +7040,12 @@ public:
     explicit StartScreen(ScreenManager &manager, std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>())
         : BaseScreen(manager, "Game Launcher"), m_soundPlayer(std::move(soundPlayer))
     {
-        // התאמת ערכת הנושא של מסך הפתיחה למראה יוקרתי ונקי עם ניגודיות גבוהה
-        m_theme.background = Color{18, 19, 23, 255};    // רקע כהה עמוק
-        m_theme.titleText = Color{240, 200, 80, 255};   // זהב חם לכותרות
-        m_theme.buttonNormal = Color{35, 37, 45, 255};  // פחם כהה לכפתורים רגילים
-        m_theme.buttonHover = Color{48, 120, 192, 255}; // כחול רויאל מודגש ב-Hover
-        m_theme.border = Color{55, 58, 70, 255};        // מסגרות עדינות
-        m_theme.bodyText = Color{210, 215, 225, 255};   // טקסט קריא בהיר
+        m_theme.background = Color{18, 19, 23, 255};
+        m_theme.titleText = Color{240, 200, 80, 255};
+        m_theme.buttonNormal = Color{35, 37, 45, 255};
+        m_theme.buttonHover = Color{48, 120, 192, 255};
+        m_theme.border = Color{55, 58, 70, 255};
+        m_theme.bodyText = Color{210, 215, 225, 255};
     }
 
     void onEnter() override {}
@@ -6904,10 +7074,20 @@ public:
                     {
                         m_selectedMode = GameMode::Classic;
                     }
+                    else if (isPointInRect(m_mousePos, m_pvpOpponentPos, m_modeBtnSize))
+                    {
+                        m_selectedOpponent = OpponentType::LocalPlayer;
+                    }
+                    else if (isPointInRect(m_mousePos, m_aiOpponentPos, m_modeBtnSize))
+                    {
+                        m_selectedOpponent = OpponentType::AI;
+                    }
                     else if (isPointInRect(m_mousePos, m_playBtnPos, m_btnSize))
                     {
                         bool isSimultaneous = (m_selectedMode == GameMode::Simultaneous);
-                        m_screenManager.pushScreen(std::make_unique<ChessGameScreen>(m_screenManager, isSimultaneous, m_soundPlayer));
+                        bool isAiOpponent = (m_selectedOpponent == OpponentType::AI);
+                        m_screenManager.pushScreen(std::make_unique<ChessGameScreen>(
+                            m_screenManager, isSimultaneous, isAiOpponent, m_soundPlayer));
                     }
                     else if (isPointInRect(m_mousePos, m_exitBtnPos, m_btnSize))
                     {

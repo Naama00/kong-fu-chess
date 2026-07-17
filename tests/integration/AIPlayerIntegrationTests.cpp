@@ -8,7 +8,7 @@
 #include "engine/core/GameEngine.hpp"
 #include "engine/io/BoardParser.hpp"
 #include "engine/snapshot/SnapshotBuilder.hpp"
-#include "players/ai/AIPlayer.hpp"
+#include "players/ai/EasyAI.hpp"
 
 TEST_CASE("AIPlayer can produce an action that GameEngine executes", "[integration][ai]") {
     std::string setup =
@@ -21,7 +21,7 @@ TEST_CASE("AIPlayer can produce an action that GameEngine executes", "[integrati
 
     auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
     auto gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine);
-    kungfu::AIPlayer aiPlayer(kungfu::PlayerColor::Black);
+    kungfu::EasyAI aiPlayer(kungfu::PlayerColor::Black);
 
     std::vector<kungfu::ActionRequest> whiteRequests;
     whiteRequests.emplace_back(1, kungfu::PlayerColor::White, kungfu::PlayerAction(kungfu::Position(0, 0), kungfu::Position(0, 1)));

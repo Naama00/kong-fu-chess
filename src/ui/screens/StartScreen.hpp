@@ -23,24 +23,31 @@ public:
 private:
     Vector2D m_mousePos{0.0f, 0.0f};
     GameMode m_selectedMode{GameMode::Simultaneous};
-    OpponentType m_selectedOpponent{OpponentType::AI}; // ברירת מחדל נגד המחשב
+    OpponentType m_selectedOpponent{OpponentType::AI};
+    ChessGameScreen::AiDifficulty m_selectedDifficulty{ChessGameScreen::AiDifficulty::Medium}; // משתנה רמת קושי
     std::shared_ptr<ISoundPlayer> m_soundPlayer;
 
     // הגדרות גיאומטריות של כפתורי הבחירה והפעולה
     const Vector2D m_btnSize{260.0f, 55.0f};
     const Vector2D m_modeBtnSize{125.0f, 45.0f};
+    const Vector2D m_difficultyBtnSize{80.0f, 45.0f};
 
     // מיקומי בחירת מצב משחק
-    const Vector2D m_simulModePos{365.0f, 350.0f};
-    const Vector2D m_classicModePos{500.0f, 350.0f};
+    const Vector2D m_simulModePos{365.0f, 320.0f};
+    const Vector2D m_classicModePos{500.0f, 320.0f};
 
     // מיקומי בחירת יריב
-    const Vector2D m_pvpOpponentPos{365.0f, 450.0f};
-    const Vector2D m_aiOpponentPos{500.0f, 450.0f};
+    const Vector2D m_pvpOpponentPos{365.0f, 420.0f};
+    const Vector2D m_aiOpponentPos{500.0f, 420.0f};
+
+    // מיקומי בחירת רמת קושי
+    const Vector2D m_easyDifficultyPos{365.0f, 520.0f};
+    const Vector2D m_mediumDifficultyPos{455.0f, 520.0f};
+    const Vector2D m_hardDifficultyPos{545.0f, 520.0f};
 
     // מיקומי כפתורי שליטה ראשיים
-    const Vector2D m_playBtnPos{365.0f, 540.0f};
-    const Vector2D m_exitBtnPos{365.0f, 610.0f};
+    const Vector2D m_playBtnPos{365.0f, 620.0f};
+    const Vector2D m_exitBtnPos{365.0f, 690.0f};
 
     void drawWelcomeMessage(IRenderer &renderer)
     {
@@ -50,7 +57,7 @@ private:
 
     void drawModeSelector(IRenderer &renderer)
     {
-        renderer.drawText("Select Game Mode:", {365.0f, 325.0f}, 16, m_theme.bodyText);
+        renderer.drawText("Select Game Mode:", {365.0f, 295.0f}, 16, m_theme.bodyText);
 
         bool simulHovered = isPointInRect(m_mousePos, m_simulModePos, m_modeBtnSize);
         bool classicHovered = isPointInRect(m_mousePos, m_classicModePos, m_modeBtnSize);
@@ -72,7 +79,7 @@ private:
 
     void drawOpponentSelector(IRenderer &renderer)
     {
-        renderer.drawText("Select Opponent:", {365.0f, 425.0f}, 16, m_theme.bodyText);
+        renderer.drawText("Select Opponent:", {365.0f, 395.0f}, 16, m_theme.bodyText);
 
         bool pvpHovered = isPointInRect(m_mousePos, m_pvpOpponentPos, m_modeBtnSize);
         bool aiHovered = isPointInRect(m_mousePos, m_aiOpponentPos, m_modeBtnSize);
@@ -92,6 +99,38 @@ private:
         renderer.drawText("vs Computer", {m_aiOpponentPos.x + 13.0f, m_aiOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
     }
 
+    void drawDifficultySelector(IRenderer &renderer)
+    {
+        if (m_selectedOpponent != OpponentType::AI) return;
+
+        renderer.drawText("AI Difficulty:", {365.0f, 495.0f}, 16, m_theme.bodyText);
+
+        bool easyHovered = isPointInRect(m_mousePos, m_easyDifficultyPos, m_difficultyBtnSize);
+        bool mediumHovered = isPointInRect(m_mousePos, m_mediumDifficultyPos, m_difficultyBtnSize);
+        bool hardHovered = isPointInRect(m_mousePos, m_hardDifficultyPos, m_difficultyBtnSize);
+
+        // Easy
+        bool isEasyActive = (m_selectedDifficulty == ChessGameScreen::AiDifficulty::Easy);
+        Color easyColor = isEasyActive ? m_theme.buttonHover : (easyHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
+        renderer.drawRectangle(m_easyDifficultyPos, m_difficultyBtnSize, easyColor, true);
+        renderer.drawRectangle(m_easyDifficultyPos, m_difficultyBtnSize, m_theme.border, false);
+        renderer.drawText("Easy", {m_easyDifficultyPos.x + 18.0f, m_easyDifficultyPos.y + 28.0f}, 14, m_theme.bodyText);
+
+        // Medium
+        bool isMediumActive = (m_selectedDifficulty == ChessGameScreen::AiDifficulty::Medium);
+        Color mediumColor = isMediumActive ? m_theme.buttonHover : (mediumHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
+        renderer.drawRectangle(m_mediumDifficultyPos, m_difficultyBtnSize, mediumColor, true);
+        renderer.drawRectangle(m_mediumDifficultyPos, m_difficultyBtnSize, m_theme.border, false);
+        renderer.drawText("Med", {m_mediumDifficultyPos.x + 22.0f, m_mediumDifficultyPos.y + 28.0f}, 14, m_theme.bodyText);
+
+        // Hard
+        bool isHardActive = (m_selectedDifficulty == ChessGameScreen::AiDifficulty::Hard);
+        Color hardColor = isHardActive ? m_theme.buttonHover : (hardHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
+        renderer.drawRectangle(m_hardDifficultyPos, m_difficultyBtnSize, hardColor, true);
+        renderer.drawRectangle(m_hardDifficultyPos, m_difficultyBtnSize, m_theme.border, false);
+        renderer.drawText("Hard", {m_hardDifficultyPos.x + 18.0f, m_hardDifficultyPos.y + 28.0f}, 14, m_theme.bodyText);
+    }
+
     void drawMenuButtons(IRenderer &renderer)
     {
         bool playHovered = isPointInRect(m_mousePos, m_playBtnPos, m_btnSize);
@@ -107,6 +146,7 @@ protected:
         drawWelcomeMessage(renderer);
         drawModeSelector(renderer);
         drawOpponentSelector(renderer);
+        drawDifficultySelector(renderer);
         drawMenuButtons(renderer);
     }
 
@@ -156,12 +196,24 @@ public:
                     {
                         m_selectedOpponent = OpponentType::AI;
                     }
+                    else if (m_selectedOpponent == OpponentType::AI && isPointInRect(m_mousePos, m_easyDifficultyPos, m_difficultyBtnSize))
+                    {
+                        m_selectedDifficulty = ChessGameScreen::AiDifficulty::Easy;
+                    }
+                    else if (m_selectedOpponent == OpponentType::AI && isPointInRect(m_mousePos, m_mediumDifficultyPos, m_difficultyBtnSize))
+                    {
+                        m_selectedDifficulty = ChessGameScreen::AiDifficulty::Medium;
+                    }
+                    else if (m_selectedOpponent == OpponentType::AI && isPointInRect(m_mousePos, m_hardDifficultyPos, m_difficultyBtnSize))
+                    {
+                        m_selectedDifficulty = ChessGameScreen::AiDifficulty::Hard;
+                    }
                     else if (isPointInRect(m_mousePos, m_playBtnPos, m_btnSize))
                     {
                         bool isSimultaneous = (m_selectedMode == GameMode::Simultaneous);
                         bool isAiOpponent = (m_selectedOpponent == OpponentType::AI);
                         m_screenManager.pushScreen(std::make_unique<ChessGameScreen>(
-                            m_screenManager, isSimultaneous, isAiOpponent, m_soundPlayer));
+                            m_screenManager, isSimultaneous, isAiOpponent, m_selectedDifficulty, m_soundPlayer));
                     }
                     else if (isPointInRect(m_mousePos, m_exitBtnPos, m_btnSize))
                     {

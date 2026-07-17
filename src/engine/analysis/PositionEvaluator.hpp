@@ -1,53 +1,27 @@
 // engine/analysis/PositionEvaluator.hpp
 #pragma once
-#include "engine/board/IBoard.hpp"
-#include "engine/realtime/RealTimeArbiter.hpp"
+#include "engine/analysis/IPositionEvaluator.hpp"
 #include "engine/common/Enums.hpp"
 
 namespace kungfu {
 
-class PositionEvaluator {
+// Forward declarations למניעת תלויות הדדיות כבדות
+namespace view {
+    struct GameSnapshot;
+}
+class IBoard;
+class RealTimeArbiter;
+
+class PositionEvaluator : public IPositionEvaluator {
 public:
-    static int getPieceValue(PieceType type) noexcept {
-        switch (type) {
-            case PieceType::Pawn:   return 1;
-            case PieceType::Knight: return 3;
-            case PieceType::Bishop: return 3;
-            case PieceType::Rook:   return 5;
-            case PieceType::Queen:  return 9;
-            default:                return 0;
-        }
-    }
+    PositionEvaluator() = default;
+    ~PositionEvaluator() override = default;
 
-    static int evaluateBalance(const IBoard& board, const RealTimeArbiter& arbiter) noexcept {
-        int whiteMaterial = 0;
-        int blackMaterial = 0;
+    static int getPieceValue(PieceType type) noexcept;
 
-        for (const auto& piece : board.pieces()) {
-            if (piece && piece->state() != PieceState::Captured) {
-                int val = getPieceValue(piece->type());
-                if (piece->color() == PlayerColor::White) {
-                    whiteMaterial += val;
-                } else {
-                    blackMaterial += val;
-                }
-            }
-        }
+    int evaluate(const view::GameSnapshot& snapshot, PlayerColor evaluatingPlayer) const noexcept override;
 
-        for (const auto& motion : arbiter.activeMotions()) {
-            auto piece = motion.piece();
-            if (piece && piece->state() == PieceState::Airborne) {
-                int val = getPieceValue(piece->type());
-                if (piece->color() == PlayerColor::White) {
-                    whiteMaterial += val;
-                } else {
-                    blackMaterial += val;
-                }
-            }
-        }
-
-        return whiteMaterial - blackMaterial;
-    }
+    static int evaluateBalance(const IBoard& board, const RealTimeArbiter& arbiter) noexcept;
 };
 
 } // namespace kungfu

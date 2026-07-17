@@ -12,10 +12,13 @@
 #include "engine/core/GameEngine.hpp"
 #include "engine/events/IGameObserver.hpp"
 #include "players/human/HumanPlayer.hpp"
-#include "players/ai/AIPlayer.hpp"
 #include "engine/snapshot/SnapshotBuilder.hpp"
 #include "engine/io/BoardParser.hpp"
 #include "engine/common/PieceTokenCodec.hpp"
+#include "players/IPlayer.hpp"
+#include "players/ai/EasyAI.hpp"
+#include "players/ai/MediumAI.hpp"
+#include "players/ai/HardAI.hpp"
 #include <memory>
 #include <iostream>
 #include <string>
@@ -25,14 +28,23 @@
 
 class ChessGameScreen : public BaseScreen
 {
+public:
+    enum class AiDifficulty
+    {
+        Easy,
+        Medium,
+        Hard
+    };
+
 private:
     std::shared_ptr<kungfu::GameEngine> m_gameEngine;
     std::shared_ptr<kungfu::HumanPlayer> m_humanPlayer;
-    std::shared_ptr<kungfu::AIPlayer> m_aiPlayer;
+    std::shared_ptr<kungfu::IPlayer> m_aiPlayer;
     kungfu::GameConfig m_config;
     std::shared_ptr<ISoundPlayer> m_soundPlayer;
     bool m_isPaused = false;
     bool m_isAiOpponent = false;    // שדה חדש למעקב אחר משחק מול ה-AI
+    AiDifficulty m_aiDifficulty = AiDifficulty::Medium;
     float m_aiDecisionTimer = 1.0f; // טיימר אקראי לפעולת ה-AI במצב סימולטני
 
     // היסטוריית מהלכים של כל שחקן
@@ -130,7 +142,6 @@ private:
         return total;
     }
 
-    // פונקציית עזר ליצירת מחרוזת ייצוג מהלך תקין
     std::string getMoveNotationString(kungfu::PieceType type, const BoardPos &from, const BoardPos &to) const
     {
         char pieceChar = kungfu::PieceTokenCodec::toChar(type);
@@ -168,10 +179,15 @@ private:
         m_gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine, m_config);
         m_humanPlayer = std::make_shared<kungfu::HumanPlayer>(m_gameEngine);
 
-        // יצירת ה-AI רק במידה והשחקן בחר לשחק מול המחשב
         if (m_isAiOpponent)
         {
-            m_aiPlayer = std::make_shared<kungfu::AIPlayer>(kungfu::PlayerColor::Black);
+            if (m_aiDifficulty == AiDifficulty::Easy) {
+                m_aiPlayer = std::make_shared<kungfu::EasyAI>(kungfu::PlayerColor::Black);
+            } else if (m_aiDifficulty == AiDifficulty::Medium) {
+                m_aiPlayer = std::make_shared<kungfu::MediumAI>(kungfu::PlayerColor::Black);
+            } else {
+                m_aiPlayer = std::make_shared<kungfu::HardAI>(kungfu::PlayerColor::Black);
+            }
         }
         else
         {
@@ -384,9 +400,10 @@ protected:
 public:
     explicit ChessGameScreen(ScreenManager &manager,
                              bool isSimultaneousMode,
-                             bool isAiOpponent = false, // פרמטר חדש
+                             bool isAiOpponent,
+                             AiDifficulty aiDifficulty,
                              std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>())
-        : BaseScreen(manager, "Chess Match"), m_isAiOpponent(isAiOpponent), m_soundPlayer(std::move(soundPlayer))
+        : BaseScreen(manager, "Chess Match"), m_isAiOpponent(isAiOpponent), m_aiDifficulty(aiDifficulty), m_soundPlayer(std::move(soundPlayer))
     {
         m_config.allowSimultaneousMovement = isSimultaneousMode;
         if (!m_config.allowSimultaneousMovement)
@@ -400,18 +417,9 @@ public:
 
     explicit ChessGameScreen(ScreenManager &manager,
                              bool isSimultaneousMode,
+                             bool isAiOpponent = false,
                              std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>())
-        : BaseScreen(manager, "Chess Match"), m_soundPlayer(std::move(soundPlayer))
-    {
-        m_config.allowSimultaneousMovement = isSimultaneousMode;
-        if (!m_config.allowSimultaneousMovement)
-        {
-            m_config.cooldownDurationMs = 0;
-            m_config.allowJumping = false;
-            m_config.enablePremoves = false;
-        }
-        initializeScreen();
-    }
+        : ChessGameScreen(manager, isSimultaneousMode, isAiOpponent, AiDifficulty::Medium, soundPlayer) {}
 
     void onEnter() override
     {
@@ -476,7 +484,6 @@ public:
             m_menuButton->update(deltaTime);
         }
 
-        // --- ניהול וקבלת החלטות של ה-AI ---
         if (!m_isPaused && !m_gameEngine->isGameOver() && m_isAiOpponent && m_aiPlayer)
         {
             auto snapshot = kungfu::view::SnapshotBuilder::build(
@@ -491,7 +498,6 @@ public:
 
             if (!m_config.allowSimultaneousMovement)
             {
-                // מצב קלאסי (תורות): ה-AI זז מיד ברגע שהתור עובר לשחור
                 if (m_gameEngine->currentTurn() == kungfu::PlayerColor::Black)
                 {
                     shouldAiMove = true;
@@ -499,12 +505,10 @@ public:
             }
             else
             {
-                // מצב קונג-פו (זמן אמת): ה-AI פועל במרווחי זמן מדומים לקבלת החלטות
                 m_aiDecisionTimer -= deltaTime;
                 if (m_aiDecisionTimer <= 0.0f)
                 {
                     shouldAiMove = true;
-                    // איפוס מחדש של הטיימר לזמן אקראי בין 1.0 ל-2.2 שניות (לדימוי שחקן אנושי)
                     m_aiDecisionTimer = 1.0f + (static_cast<float>(std::rand()) / RAND_MAX) * 1.2f;
                 }
             }
@@ -517,8 +521,6 @@ public:
                     auto aiResults = m_gameEngine->processActionRequests(aiRequests);
                     if (!aiResults.empty() && aiResults.front().status == kungfu::ActionStatus::Accepted)
                     {
-
-                        // תרגום המהלך וכתיבתו להיסטוריה הצידית של שחור
                         auto action = aiRequests.front().action;
                         kungfu::PieceType pieceType = kungfu::PieceType::Pawn;
                         auto pieceOpt = m_gameEngine->getBoard()->pieceAt(action.from);
@@ -537,7 +539,6 @@ public:
                             m_blackHistory.erase(m_blackHistory.begin());
                         }
 
-                        // במצב תורות קלאסי בלבד: קידום הסימולציה ב-1000ms להשלמת ההגעה הפיזית ליעד
                         if (!m_config.allowSimultaneousMovement)
                         {
                             m_gameEngine->wait(1000);
@@ -595,15 +596,13 @@ public:
                                 BoardPos clickedTile{row, col};
                                 float timeSinceLastClick = m_totalTime - m_lastClickTime;
 
-                                // --- הגנה ארכיטקטונית לחסימת קלט ---
-                                // אם המשחק מול ה-AI, והמשתמש מבצע קליק ראשון, נמנע ממנו לבחור בכלים של ה-AI (השחורים)
                                 auto selectedBefore = m_humanPlayer->selectedPosition();
                                 if (!selectedBefore.has_value() && m_isAiOpponent)
                                 {
                                     auto pieceColor = m_gameEngine->getPieceColorAt(kungfu::Position(row, col));
                                     if (pieceColor.has_value() && pieceColor.value() == kungfu::PlayerColor::Black)
                                     {
-                                        continue; // מעבר ישיר לאירוע הבא - מניעת המשך העיבוד ב-Controller [1]
+                                        continue;
                                     }
                                 }
 
@@ -612,17 +611,15 @@ public:
                                     m_lastClickTime = 0.0f;
                                     m_lastClickedTile = BoardPos{-1, -1};
 
-                                    auto selectedOpt = m_humanPlayer->selectedPosition();
+                                        auto selectedOpt = m_humanPlayer->selectedPosition();
 
-                                    // אם כבר יש כלי מסומן, לחיצה כפולה עליו תבצע קפיצה על המקום במנוע המשחק
                                     if (selectedOpt.has_value())
                                     {
                                         auto pos = *selectedOpt;
-                                        auto moveResult = m_gameEngine->requestMove(pos, pos); // שליחת בקשת קפיצה (from == to)
+                                        auto moveResult = m_gameEngine->requestMove(pos, pos);
 
                                         if (moveResult.isAccepted)
                                         {
-                                            // מציאת סוג הכלי לטובת רישום המהלך בהיסטוריית המהלכים
                                             kungfu::PieceType pieceType = kungfu::PieceType::Pawn;
                                             auto pieceOpt = m_gameEngine->getBoard()->pieceAt(pos);
                                             if (pieceOpt.has_value() && pieceOpt.value())
@@ -640,7 +637,6 @@ public:
 
                                             std::string logText = getMoveNotationString(pieceType, BoardPos{pos.row(), pos.col()}, BoardPos{pos.row(), pos.col()});
 
-                                            // זיהוי צבע הכלי שקפץ לצורך רישום בלוג המתאים
                                             auto pieceColor = kungfu::PlayerColor::White;
                                             auto transitOpt = m_gameEngine->getArbiter().getPieceInTransitAt(pos);
                                             if (transitOpt.has_value() && transitOpt.value())
@@ -662,11 +658,10 @@ public:
                                             }
                                         }
 
-                                        m_humanPlayer->clearSelection(); // ביטול סימון הכלי לאחר הקפיצה
+                                        m_humanPlayer->clearSelection();
                                     }
                                     else
                                     {
-                                        // אם אין כלי מסומן, נבצע לחיצה רגילה לצורך סימון ראשוני
                                         int virtualX = col * 100 + 50;
                                         int virtualY = row * 100 + 50;
                                         m_humanPlayer->handleClick(virtualX, virtualY);
@@ -737,9 +732,8 @@ public:
                                             selectedBefore,
                                             m_boardRangeX / 8);
 
-                                        auto requests = m_humanPlayer->decideActions(snapshot); // ניקוז הבקשה הממתינות כדי שלא תצטבר
+                                        auto requests = m_humanPlayer->decideActions(snapshot);
 
-                                        // אנו בודקים האם המהלך התקבל בהצלחה ישירות מתוצאת הקליק המקורית
                                         bool moveAccepted = (result.description.find("Move requested:") == 0);
 
                                         if (moveAccepted)
@@ -752,7 +746,7 @@ public:
                                             {
                                                 m_whiteHistory.push_back(logText);
                                                 if (m_whiteHistory.size() > 8)
-                                                {
+                                                    {
                                                     m_whiteHistory.erase(m_whiteHistory.begin());
                                                 }
                                             }
@@ -769,31 +763,31 @@ public:
                                 }
                             }
                         }
-                    }
-                    else
-                    {
-                        m_hoveredTile = BoardPos{-1, -1};
-                    }
-                }
-            }
-            else if (event.type == InputEvent::Type::Keyboard)
-            {
-                if (event.key.key == Key::Escape)
-                {
-                    if (m_gameEngine->isGameOver())
-                    {
-                        m_screenManager.popScreen();
-                    }
-                    else
-                    {
-                        togglePause();
+                        else
+                        {
+                            m_hoveredTile = BoardPos{-1, -1};
+                        }
                     }
                 }
-                else if (event.key.key == Key::Space)
+                else if (event.type == InputEvent::Type::Keyboard)
                 {
-                    if (!m_gameEngine->isGameOver())
+                    if (event.key.key == Key::Escape)
                     {
-                        togglePause();
+                        if (m_gameEngine->isGameOver())
+                        {
+                            m_screenManager.popScreen();
+                        }
+                        else
+                        {
+                            togglePause();
+                        }
+                    }
+                    else if (event.key.key == Key::Space)
+                    {
+                        if (!m_gameEngine->isGameOver())
+                        {
+                            togglePause();
+                        }
                     }
                 }
             }
