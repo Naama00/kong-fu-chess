@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "core/board/Board.hpp"
-#include "core/io/BoardParser.hpp"
-#include "core/rules/RuleEngine.hpp"
+#include "engine/board/Board.hpp"
+#include "engine/io/BoardParser.hpp"
+#include "engine/rules/RuleEngine.hpp"
 
 TEST_CASE("RuleEngine Basic Validations", "[rules]") {
     auto board = std::make_shared<kungfu::Board>(8, 8);
@@ -68,21 +68,21 @@ TEST_CASE("Piece Specific Rules Integration", "[rules]") {
     SECTION("Simplified Pawn rules") {
         std::string boardStr =
             ". . .\n"
-            "wP . bP\n"
-            ". . .\n"; // לוח בגודל 3X3. לבן ב-(1,0), שחור ב-(1,2)
+            "bP . wP\n"
+            ". . .\n"; // לוח בגודל 3X3. שחור ב-(1,0), לבן ב-(1,2)
 
         auto board = kungfu::BoardParser::parse(boardStr);
         REQUIRE(board != nullptr);
         kungfu::RuleEngine engine(board);
 
-        // pawn לבן נע למעלה ל-(2,0)
-        REQUIRE(engine.validateMove(kungfu::Position(1, 0), kungfu::Position(2, 0)).isValid);
-
-        // pawn שחור נע למטה ל-(0,2)
+        // pawn לבן נע למעלה ל-(0,2) (1 - 1 = 0)
         REQUIRE(engine.validateMove(kungfu::Position(1, 2), kungfu::Position(0, 2)).isValid);
 
+        // pawn שחור נע למטה ל-(2,0) (1 + 1 = 2)
+        REQUIRE(engine.validateMove(kungfu::Position(1, 0), kungfu::Position(2, 0)).isValid);
+
         // אסור לזוז באלכסון אם המשבצת ריקה
-        REQUIRE_FALSE(engine.validateMove(kungfu::Position(1, 0), kungfu::Position(2, 1)).isValid);
+        REQUIRE_FALSE(engine.validateMove(kungfu::Position(1, 2), kungfu::Position(0, 1)).isValid);
     }
 }
 
@@ -137,8 +137,8 @@ TEST_CASE("King, Bishop, and Queen Illegal Movements", "[rules]") {
 TEST_CASE("Pawn Movement and Capture Verification", "[rules]") {
     std::string boardStr =
         ". . . . .\n"
-        "wP . wB wR .\n" // שורה 1: לבן ב-(1,0), רץ לבן ב-(1,2), צריח לבן ב-(1,3)
-        "bR bN bP . .\n" // שורה 2: צריח שחור ב-(2,0), פרש שחור ב-(2,1), שחור ב-(2,2)
+        "bP . bB bR .\n" // שורה 1: שחור ב-(1,0), רץ שחור ב-(1,2), צריח שחור ב-(1,3)
+        "wR wN wP . .\n" // שורה 2: צריח לבן ב-(2,0), פרש לבן ב-(2,1), לבן ב-(2,2)
         ". . . . .\n";
 
     auto board = kungfu::BoardParser::parse(boardStr);
@@ -146,11 +146,25 @@ TEST_CASE("Pawn Movement and Capture Verification", "[rules]") {
     kungfu::RuleEngine engine(board);
 
     SECTION("White Pawn rules") {
-        // 1. התקדמות קדימה חסומה על ידי כלי עוין (צריח שחור ב-2,0) -> אסור לאכול קדימה
+        // 1. התקדמות קדימה (למעלה) חסומה על ידי כלי עוין (רץ שחור ב-1,2) -> אסור לאכול קדימה (עבור רגלי לבן ב-2,2)
+        auto forwardBlock = engine.validateMove(kungfu::Position(2, 2), kungfu::Position(1, 2));
+        REQUIRE_FALSE(forwardBlock.isValid);
+
+        // 2. אכילה באלכסון ימינה (למעלה) של הצריח השחור ב-(1,3) -> מותר
+        auto diagonalCapture = engine.validateMove(kungfu::Position(2, 2), kungfu::Position(1, 3));
+        REQUIRE(diagonalCapture.isValid);
+
+        // 3. תנועה של 2 משבצות קדימה ל-(0,2) -> אסור
+        auto moveTwoCells = engine.validateMove(kungfu::Position(2, 2), kungfu::Position(0, 2));
+        REQUIRE_FALSE(moveTwoCells.isValid);
+    }
+
+    SECTION("Black Pawn rules") {
+        // 1. התקדמות קדימה חסומה על ידי כלי עוין (צריח לבן ב-2,0) -> אסור לאכול קדימה
         auto forwardBlock = engine.validateMove(kungfu::Position(1, 0), kungfu::Position(2, 0));
         REQUIRE_FALSE(forwardBlock.isValid);
 
-        // 2. אכילה באלכסון ימינה של הפרש השחור ב-(2,1) -> מותר
+        // 2. אכילה באלכסון ימינה של הפרש הלבן ב-(2,1) -> מותר
         auto diagonalCapture = engine.validateMove(kungfu::Position(1, 0), kungfu::Position(2, 1));
         REQUIRE(diagonalCapture.isValid);
 
@@ -158,28 +172,14 @@ TEST_CASE("Pawn Movement and Capture Verification", "[rules]") {
         auto moveTwoCells = engine.validateMove(kungfu::Position(1, 0), kungfu::Position(3, 0));
         REQUIRE_FALSE(moveTwoCells.isValid);
     }
-
-    SECTION("Black Pawn rules") {
-        // 1. התקדמות קדימה (למטה) חסומה על ידי כלי עוין (רץ לבן ב-1,2) -> אסור לאכול קדימה (עבור רגלי שחור ב-2,2)
-        auto forwardBlock = engine.validateMove(kungfu::Position(2, 2), kungfu::Position(1, 2));
-        REQUIRE_FALSE(forwardBlock.isValid);
-
-        // 2. אכילה באלכסון ימינה (למטה) של הצריח הלבן ב-(1,3) -> מותר
-        auto diagonalCapture = engine.validateMove(kungfu::Position(2, 2), kungfu::Position(1, 3));
-        REQUIRE(diagonalCapture.isValid);
-
-        // 3. תנועה של 2 משבצות קדימה (למטה) ל-(0,2) -> אסור
-        auto moveTwoCells = engine.validateMove(kungfu::Position(2, 2), kungfu::Position(0, 2));
-        REQUIRE_FALSE(moveTwoCells.isValid);
-    }
 }
 
 TEST_CASE("Advanced Pawn Rules (Double Step and Path Clearance)", "[rules]") {
-    // שורת ההתחלה של לבן היא 1.
+    // שורת ההתחלה של שחור היא 1.
     std::string setupStr =
         ". . . . . . . .\n" // 0
-        "wP . wP . . . . .\n" // 1 (wP ב-1,0 חופשי, wP ב-1,2 חסום ב-2,2)
-        ". . bR . . . . .\n" // 2 (bR ב-2,2 חוסם את הדרך)
+        "bP . bP . . . . .\n" // 1 (bP ב-1,0 חופשי, bP ב-1,2 חסום ב-2,2)
+        ". . wR . . . . .\n" // 2 (wR ב-2,2 חוסם את הדרך)
         ". . . . . . . .\n" // 3
         ". . . . . . . .\n" // 4
         ". . . . . . . .\n" // 5
@@ -204,13 +204,13 @@ TEST_CASE("Advanced Pawn Rules (Double Step and Path Clearance)", "[rules]") {
 }
 
 TEST_CASE("Pawn Double Step Depends on hasMoved, Not Absolute Row", "[rules]") {
-    // לוח לא סטנדרטי לגמרי - הרגלי הלבן מתחיל בשורה 4, לא בשורה 1 הקבועה מהעבר
+    // לוח לא סטנדרטי לגמרי - הרגלי השחור מתחיל בשורה 4, לא בשורה 1 הקבועה מהעבר
     std::string boardStr =
         ". . .\n"
         ". . .\n"
         ". . .\n"
         ". . .\n"
-        "wP . .\n"
+        "bP . .\n"
         ". . .\n"
         ". . .\n";
 
@@ -231,9 +231,8 @@ TEST_CASE("Pawn Double Step Depends on hasMoved, Not Absolute Row", "[rules]") {
     }
 }
 
-TEST_CASE("Knight Can Target Friendly Squares (Kung-Fu Rule)", "[rules][knight]") {
-    // פרש לבן ב-(0,0) מוקף ברגלים לבנים – בשחמט רגיל תנועה לריבוע ידידותי אסורה,
-    // בקונג-פו שחמט זה חוקי (הדרך היחידה לחסל כלי של עצמך).
+TEST_CASE("Knight Cannot Target Friendly Squares", "[rules][knight]") {
+    // פרש לבן ב-(0,0) מוקף ברגלים לבנים – תנועה לריבוע ידידותי אסורה.
     std::string boardStr =
         "wN . .\n"
         ". . .\n"
@@ -243,9 +242,10 @@ TEST_CASE("Knight Can Target Friendly Squares (Kung-Fu Rule)", "[rules][knight]"
     REQUIRE(board != nullptr);
     kungfu::RuleEngine engine(board);
 
-    // קפיצה ל-(2,1) שם יושב רגלי ידידותי – חייב להיות חוקי עבור פרש
+    // קפיצה ל-(2,1) שם יושב רגלי ידידותי – אסור
     auto res = engine.validateMove(kungfu::Position(0, 0), kungfu::Position(2, 1));
-    REQUIRE(res.isValid);
+    REQUIRE_FALSE(res.isValid);
+    REQUIRE(res.reason == "friendly_destination");
 }
 
 TEST_CASE("Non-Knight Pieces Cannot Target Friendly Squares", "[rules][knight]") {

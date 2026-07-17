@@ -36,16 +36,14 @@ MoveValidation RuleEngine::validateMove(const Position& from, const Position& to
         return {false, "illegal_piece_move"};
     }
 
-    // 4. מניעת פגיעה בכלי ידידותי ביעד.
-    // כלים שנמצאים בתנועה (Moving) או באוויר (Airborne) אינם חוסמים את היעד —
-    // מיקומם על הלוח הוא אינטרפולטיבי בלבד ועשוי לחפוף את היעד בטעות.
+    // 4. מניעת פגיעה בכלי ידידותי ביעד (אין חריגים - חסום עבור כל הכלים כולל פרשים)
     auto targetPieceOpt = board_->pieceAt(to);
     if (targetPieceOpt.has_value()) {
         auto targetPiece = targetPieceOpt.value();
         if (targetPiece &&
             targetPiece->state() != PieceState::Moving &&
             targetPiece->state() != PieceState::Airborne &&
-            targetPiece->color() == piece->color()) {
+            targetPiece->color() == piece->color()) { 
             return {false, "friendly_destination"};
         }
     }
@@ -92,8 +90,6 @@ MoveValidation RuleEngine::validateHypotheticalMove(const PiecePtr& piece, const
         piece->setPosition(from);
         placedTemporarily = board_->placePiece(piece, from);
         if (!placedTemporarily) {
-            // הצבה נכשלה מסיבה בלתי צפויה - משחזרים מיד ולא ממשיכים לאמת
-            // מהלך על מצב לוח שקרי.
             piece->setPosition(originalPos);
             return {false, "internal_error"};
         }

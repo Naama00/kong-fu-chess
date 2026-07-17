@@ -15,6 +15,9 @@ class IGameEngine;
 struct ControllerResult {
     bool actionTaken;
     std::string description;
+    std::optional<Position> from;
+    std::optional<Position> to;
+    std::optional<PlayerColor> playerColor;
 };
 
 class Controller {

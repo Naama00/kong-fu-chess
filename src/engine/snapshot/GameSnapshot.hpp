@@ -13,6 +13,7 @@ struct PieceSnapshot {
     PlayerColor color;
     Position logicalPosition;
     PieceState state;
+    bool hasMoved = false;
     
     // מיקומי ציור בפיקסלים לטובת ה-Renderer
     float pixelX;

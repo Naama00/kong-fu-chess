@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
-#include "core/board/Board.hpp"
-#include "core/io/BoardParser.hpp"
-#include "core/rules/RuleEngine.hpp"
-#include "core/engine/GameEngine.hpp"
+#include "engine/board/Board.hpp"
+#include "engine/io/BoardParser.hpp"
+#include "engine/rules/RuleEngine.hpp"
+#include "engine/core/GameEngine.hpp"
 
 TEST_CASE("Simultaneous Mode Allows Both Colors Freely", "[engine][simultaneous]") {
     std::string boardStr =
@@ -32,7 +32,7 @@ TEST_CASE("Deterministic Simulated Time Flow", "[engine][simultaneous]") {
     REQUIRE(board != nullptr);
     auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
     kungfu::GameConfig cfg;
-    cfg.allowSimultaneousMovement = false;
+    cfg.allowSimultaneousMovement = true; // simultaneous mode!
     cfg.enablePremoves = false;
     kungfu::GameEngine game(board, ruleEngine, cfg);
 
@@ -97,19 +97,19 @@ TEST_CASE("Mid-Route Enemy Collision Resolution", "[engine][simultaneous]") {
     auto res2 = game.requestMove(kungfu::Position(0, 2), kungfu::Position(0, 0)); // t=500
     REQUIRE(res2.isAccepted);
 
-    // חוק מעודכן: השחור (הגיע מאוחר יותר) אוכל את הלבן (הגיע קודם)
-    game.wait(1000); // t=1500: ההתנגשות מתרחשת. הלבן (winner) נלכד ומפונה.
-    REQUIRE_FALSE(board->pieceAt(kungfu::Position(0, 0)).has_value());
+    // חוק מעודכן: הלבן (שיצא ראשון) אוכל את השחור (שיצא שני)
+    game.wait(1000); // t=1500: ההתנגשות מתרחשת. השחור (loser) נלכד ומפונה.
+    REQUIRE_FALSE(board->pieceAt(kungfu::Position(0, 2)).has_value());
 
-    game.wait(1000); // t=2500: השחור מגיע ליעדו ב-(0,0)
-    REQUIRE(board->pieceAt(kungfu::Position(0, 0)).has_value());
-    REQUIRE(board->pieceAt(kungfu::Position(0, 0)).value()->color() == kungfu::PlayerColor::Black);
+    game.wait(1000); // t=2500: הלבן (winner) מגיע ליעדו ב-(0,2)
+    REQUIRE(board->pieceAt(kungfu::Position(0, 2)).has_value());
+    REQUIRE(board->pieceAt(kungfu::Position(0, 2)).value()->color() == kungfu::PlayerColor::White);
 }
 
 TEST_CASE("Pawn hasMoved Flag Updates Automatically Upon Arrival", "[engine][simultaneous]") {
     std::string boardStr =
         ". . .\n"
-        "wP . .\n"
+        "bP . .\n" // Change to bP
         ". . .\n"
         ". . .\n"
         ". . .\n";
@@ -164,7 +164,6 @@ TEST_CASE("Knights Do Not Collide Mid-Route", "[engine][simultaneous][knight]") 
 }
 
 TEST_CASE("Knight Captures Friendly Piece on Landing", "[engine][simultaneous][knight]") {
-    // פרש לבן ב-(0,0) קופץ ל-(2,1) שם יושב רגלי לבן – הפרש מחסל את הרגלי שלו
     std::string boardStr =
         "wN . .\n"
         ". . .\n"
@@ -175,14 +174,8 @@ TEST_CASE("Knight Captures Friendly Piece on Landing", "[engine][simultaneous][k
     auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
     kungfu::GameEngine game(board, ruleEngine);
 
+    // תנועה ליעד ידידותי אסורה תמיד גם לפרשים לפי החוק המעודכן
     auto res = game.requestMove(kungfu::Position(0, 0), kungfu::Position(2, 1));
-    REQUIRE(res.isAccepted);
-
-    // jumpDurationMs=1000, cooldown=2000 – ממתינים מעבר לנחיתה
-    game.wait(2000);
-
-    // הפרש נחת על (2,1) והחליף את הרגלי
-    REQUIRE(board->pieceAt(kungfu::Position(2, 1)).has_value());
-    REQUIRE(board->pieceAt(kungfu::Position(2, 1)).value()->type() == kungfu::PieceType::Knight);
-    REQUIRE_FALSE(board->pieceAt(kungfu::Position(0, 0)).has_value());
+    REQUIRE_FALSE(res.isAccepted);
+    REQUIRE(res.reason == "friendly_destination");
 }

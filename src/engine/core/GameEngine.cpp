@@ -5,6 +5,7 @@
 #include "engine/common/GameConfig.hpp"
 #include <algorithm>
 #include <cmath>
+
 namespace kungfu {
 
 GameEngine::GameEngine(std::shared_ptr<IBoard> board,
@@ -37,17 +38,16 @@ MoveResult GameEngine::requestMove(const Position& from, const Position& to) {
     }
     auto piece = sourcePieceOpt.value();
 
-    // 2. שאילתת מצב פיזיקלי דרך ה-Arbiter בלבד (עקרון ה-DIP)
+    // 2. שאילתת מצב פיזיקלי דרך ה-Arbiter בלבד (DIP)
     if (arbiter_.isPieceBusy(piece, currentTimeMs_)) {
-        // האצלת אימות המהלך ההיפותטי ל-RuleEngine (עמידה ב-SRP)
-        auto validation = ruleEngine_->validateHypotheticalMove(piece, from, to);
-        if (!validation.isValid) {
-            return {false, validation.reason};
+        // מניעת רישום פרה-מוב של קפיצה עצמית (מניעת קפיצה אוטומטית לאחר צינון)
+        if (from == to) {
+            return {false, "piece_on_cooldown"};
         }
         return handlePremoveRegistration(piece, from, to);
     }
 
-    // 3. אימות תורות וחוקיות סימולטנית (חוקי משחק עליונים)
+    // 3. אימות תורות וחוקיות סימולטנית
     if (!config_.allowSimultaneousMovement) {
         if (piece->color() != currentTurn_) {
             return {false, "not_your_turn"};
@@ -82,6 +82,19 @@ MoveResult GameEngine::requestMove(const Position& from, const Position& to) {
     }
 
     return result;
+}
+
+std::vector<ActionResult> GameEngine::processActionRequests(const std::vector<ActionRequest>& requests) {
+    std::vector<ActionResult> results;
+    results.reserve(requests.size());
+
+    for (const auto& request : requests) {
+        auto moveResult = requestMove(request.action.from, request.action.to);
+        results.emplace_back(request.requestId,
+            moveResult.isAccepted ? ActionStatus::Accepted : ActionStatus::Rejected);
+    }
+
+    return results;
 }
 
 MoveResult GameEngine::handlePremoveRegistration(const PiecePtr& piece, const Position& from, const Position& to) noexcept {
@@ -161,7 +174,6 @@ int GameEngine::getScore() const noexcept {
     if (!board_) return 0;
     return PositionEvaluator::evaluateBalance(*board_, arbiter_);
 }
-
 
 std::optional<PlayerColor> GameEngine::getPieceColorAt(const Position& pos) const {
     if (!board_) {

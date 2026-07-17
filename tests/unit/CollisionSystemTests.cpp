@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
-#include "core/realtime/CollisionDetector.hpp"
-#include "core/rules/CollisionResolver.hpp"
-#include "core/board/Board.hpp"
-#include "core/io/BoardParser.hpp"
+#include "engine/realtime/CollisionDetector.hpp"
+#include "engine/rules/CollisionResolver.hpp"
+#include "engine/board/Board.hpp"
+#include "engine/io/BoardParser.hpp"
 
 TEST_CASE("CollisionDetector Spatial Calculations", "[realtime][collision]") {
     kungfu::GameConfig config;
@@ -77,6 +77,10 @@ TEST_CASE("CollisionResolver Rules Resolution", "[rules][collision]") {
         whiteRook->setPosition(kungfu::Position(0, 1));
         blackRook->setPosition(kungfu::Position(0, 1));
 
+        // עדכון המצב ל-Moving באופן ידני כדי לשקף שהם אכן בעיצומה של תנועה
+        whiteRook->setState(kungfu::PieceState::Moving);
+        blackRook->setState(kungfu::PieceState::Moving);
+
         // נגדיר זמן צינון למפסיד העתידי (loser / blackRook) כדי לוודא שהוא אכן יתנקה
         tracker.setCooldown(blackRook->id(), 5000);
 
@@ -86,20 +90,21 @@ TEST_CASE("CollisionResolver Rules Resolution", "[rules][collision]") {
 
         resolver.resolveMidRouteCollision(winner, loser, 1000, events);
 
-        // הכלי שהתחיל לנוע מאוחר יותר (loser / blackRook) מובס ומסומן כנלכד [1]
+        // הכלי שהתחיל לנוע מאוחר יותר (loser / blackRook) מובס ומסומן כנלכד
         REQUIRE(loser.piece()->state() == kungfu::PieceState::Captured);
         
-        // הכלי שהתחיל לנוע ראשון (winner / whiteRook) שורד וממשיך [1]
-        REQUIRE(winner.piece()->state() == kungfu::PieceState::Idle);
+        // הכלי שהתחיל לנוע ראשון (winner / whiteRook) שורד וממשיך
+        REQUIRE(winner.piece()->state() == kungfu::PieceState::Moving);
 
-        // המפסיד מוסר מהלוח בנקודת המפגש הנוכחית שלו (0, 1) ולא מנקודת המוצא הישנה שלו (0, 2) [1]
-        REQUIRE_FALSE(board->pieceAt(kungfu::Position(0, 1)).has_value());
+        // המפסיד מוסר מהלוח
+        auto pcs = board->pieces();
+        REQUIRE(std::find(pcs.begin(), pcs.end(), loser.piece()) == pcs.end());
         
         // זמן הצינון של הכלי שנלכד (loser) מנוקה מהזיכרון
         REQUIRE_FALSE(tracker.isOnCooldown(blackRook->id(), 3000));
         
         REQUIRE(events.size() == 1);
-        // האירוע מדווח על השמדה בנקודת המפגש האמיתית באמצע המסלול [1]
+        // האירוע מדווח על השמדה בנקודת המפגש האמיתית באמצע המסלול
         REQUIRE(events[0].to == kungfu::Position(0, 1));
     }
 
@@ -137,7 +142,7 @@ TEST_CASE("CollisionResolver Rules Resolution", "[rules][collision]") {
         REQUIRE(board->pieceAt(kungfu::Position(0, 2)).value() == friendlyPawn);
     }
 
-    SECTION("Knight landing on friendly piece captures it (Kung-Fu friendly fire)") {
+    SECTION("Knight landing on friendly piece triggers block instead of capture") {
         auto whiteKnight = std::make_shared<kungfu::Piece>(kungfu::PieceType::Knight, kungfu::PlayerColor::White, kungfu::Position(0, 0));
         auto friendlyPawn = std::make_shared<kungfu::Piece>(kungfu::PieceType::Pawn, kungfu::PlayerColor::White, kungfu::Position(2, 1));
 
@@ -150,9 +155,9 @@ TEST_CASE("CollisionResolver Rules Resolution", "[rules][collision]") {
 
         REQUIRE(success == true);
         REQUIRE(whiteKnight->state() == kungfu::PieceState::Idle);
-        REQUIRE(whiteKnight->position() == kungfu::Position(2, 1));
-        REQUIRE(friendlyPawn->state() == kungfu::PieceState::Captured);
-        REQUIRE(board->pieceAt(kungfu::Position(2, 1)).value() == whiteKnight);
+        REQUIRE(whiteKnight->position() == kungfu::Position(0, 0)); // נסוג חזרה למוצא כי הדרך חסומה
+        REQUIRE(friendlyPawn->state() == kungfu::PieceState::Idle);
+        REQUIRE(board->pieceAt(kungfu::Position(2, 1)).value() == friendlyPawn);
     }
 
     SECTION("Normal arrival captures enemy piece and sets landing piece's cooldown") {

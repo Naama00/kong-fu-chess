@@ -65,7 +65,7 @@ namespace kungfu
         const GameConfig &config) noexcept
         : board_(std::move(board)), cooldownTracker_(cooldownTracker), config_(config) {}
 
-    void CollisionResolver::resolveMidRouteCollision(
+ void CollisionResolver::resolveMidRouteCollision(
         const Motion &winner,
         const Motion &loser,
         int currentTimeMs,
@@ -73,28 +73,16 @@ namespace kungfu
     {
         if (winner.piece()->color() != loser.piece()->color())
         {
-            // כשאויב נכנס לנתיב של כלי אחר תוך כדי תנועה — שניהם עוצרים.
-            // ה-winner עוצר לפני ה-loser (כי ה-loser חוסם את הנתיב שלו).
-            // ה-loser עוצר לפני ה-winner (כי ה-winner כבר "תופס" את הנתיב).
-            // הלכידה עצמה תקרה ב-resolveArrival כשמישהו יגיע ליעד שבו יושב האויב.
+            Position collisionPos = loser.piece()->position();
 
-            // עוצרים את ה-loser לפני ה-winner
-            Position winnerBlockPos = winner.to();
-            Position loserStop = findLastVacantPositionOnPath(
-                loser.from(), loser.to(), board_, &winnerBlockPos);
-            loser.piece()->setState(PieceState::Idle);
-            loser.piece()->setPosition(loserStop);
-            cooldownTracker_.setCooldown(loser.piece()->id(), currentTimeMs + config_.cooldownDurationMs);
-            events.push_back({loser.from(), loserStop, loser.piece(), false, true, false});
+            // המפסיד (loser) נלכד, מסומן כ-Captured ומוסר מהלוח
+            loser.piece()->setState(PieceState::Captured);
+            cooldownTracker_.clear(loser.piece()->id());
+            board_->removePiece(loser.piece());
 
-            // עוצרים את ה-winner לפני ה-loser (מיקומו הנוכחי/יעדו)
-            Position loserBlockPos = loser.from(); // ה-loser עדיין בדרך — from הוא הנקודה האחרונה הידועה שלו
-            Position winnerStop = findLastVacantPositionOnPath(
-                winner.from(), winner.to(), board_, &loserBlockPos);
-            winner.piece()->setState(PieceState::Idle);
-            winner.piece()->setPosition(winnerStop);
-            cooldownTracker_.setCooldown(winner.piece()->id(), currentTimeMs + config_.cooldownDurationMs);
-            events.push_back({winner.from(), winnerStop, winner.piece(), false, true, false});
+            // המנצח (winner) שורד וממשיך בדרכו (הוא נשאר ב-activeMotions_ ויגיע ליעדו כרגיל בזמנו המקורי)
+            bool capturedKing = (loser.piece()->type() == PieceType::King);
+            events.push_back({loser.from(), collisionPos, loser.piece(), capturedKing, false, true});
         }
         else
         {
@@ -124,7 +112,6 @@ namespace kungfu
         {
             auto landingTarget = board_->pieceAt(to);
 
-            // אם יש כלי בתנועה (Moving/Airborne) — מתעלמים ממנו, נחיתה רגילה
             if (landingTarget.has_value() && landingTarget.value() &&
                 (landingTarget.value()->state() == PieceState::Moving ||
                  landingTarget.value()->state() == PieceState::Airborne))
@@ -134,7 +121,6 @@ namespace kungfu
 
             if (!landingTarget.has_value())
             {
-                // משבצת פנויה — נחיתה רגילה
                 piece->setState(PieceState::Idle);
                 piece->setPosition(to);
                 board_->placePiece(piece, to);
@@ -143,11 +129,9 @@ namespace kungfu
                 return true;
             }
 
-            // יש כלי סטטי על משבצת הנחיתה
             auto targetPiece = landingTarget.value();
             if (targetPiece->color() != piece->color())
             {
-                // אויב — הלבן נוחת ואוכל אותו (כמו שנקבע: Airborne אוכל כל מי שנמצא בנחיתה)
                 bool capturedKing = (targetPiece->type() == PieceType::King);
                 targetPiece->setState(PieceState::Captured);
                 cooldownTracker_.clear(targetPiece->id());
@@ -158,12 +142,11 @@ namespace kungfu
                 board_->placePiece(piece, to);
                 piece->markMoved();
                 cooldownTracker_.setCooldown(piece->id(), motion.arrivalTime() + config_.cooldownDurationMs);
-                events.push_back({from, to, piece, capturedKing, false, true}); // isCapture = true!
+                events.push_back({from, to, piece, capturedKing, false, true});
                 return true;
             }
             else
             {
-                // ידידותי — מחפשים משבצת סמוכה פנויה לנחיתה
                 Position finalDestination = from;
                 for (int rOffset = -1; rOffset <= 1; ++rOffset)
                 {
@@ -196,8 +179,6 @@ namespace kungfu
 
         auto targetPieceOpt = board_->pieceAt(to);
 
-        // כלים שעדיין בתנועה (Moving) או באוויר (Airborne) אינם נחשבים כחוסמים —
-        // מיקומם על הלוח הוא אינטרפולטיבי בלבד ולא מיקום סופי שיש להתחשב בו.
         if (targetPieceOpt.has_value() &&
             targetPieceOpt.value() &&
             (targetPieceOpt.value()->state() == PieceState::Airborne ||
@@ -212,21 +193,15 @@ namespace kungfu
             auto targetPiece = targetPieceOpt.value();
             if (targetPiece->color() == piece->color())
             {
-                if (piece->type() != PieceType::Knight)
-                {
-                    isFriendlyBlock = true;
-                }
+                isFriendlyBlock = true; // חסום עבור כל סוגי הכלים כולל פרשים
             }
         }
 
-        // רגלי אינו יכול לאכול ישר קדימה — רק באלכסון.
-        // אם רגלי הגיע ליעד דרך מהלך ישר (אותה עמודה) ויש שם אויב — נעצר לפניו.
         if (targetPieceOpt.has_value() && targetPieceOpt.value() &&
             piece->type() == PieceType::Pawn &&
             targetPieceOpt.value()->color() != piece->color() &&
             to.col() == from.col())
         {
-            // מהלך קדימה ישר — לכידה אסורה. הרגלי נעצר לפני היעד.
             Position stopPos = findLastVacantPositionOnPath(from, to, board_);
             piece->setState(PieceState::Idle);
             piece->setPosition(stopPos);
@@ -239,7 +214,15 @@ namespace kungfu
 
         if (isFriendlyBlock)
         {
-            finalDestination = findLastVacantPositionOnPath(from, to, board_);
+            // הגנה מפני לולאה אינסופית: פרש אינו זקוק לחיפוש נתיב ונסוג ישר חזרה למוצא
+            if (piece->type() == PieceType::Knight)
+            {
+                finalDestination = from;
+            }
+            else
+            {
+                finalDestination = findLastVacantPositionOnPath(from, to, board_);
+            }
 
             piece->setState(PieceState::Idle);
             piece->setPosition(finalDestination);
@@ -277,7 +260,7 @@ namespace kungfu
             cooldownTracker_.clear(piece->id());
         }
         cooldownTracker_.setCooldown(finalPiece->id(), motion.arrivalTime() + config_.cooldownDurationMs);
-        events.push_back({from, finalDestination, finalPiece, capturedKing, false, isCapture}); // עדכון isCapture סופי
+        events.push_back({from, finalDestination, finalPiece, capturedKing, false, isCapture});
 
         return true;
     }

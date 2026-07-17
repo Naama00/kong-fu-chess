@@ -68,6 +68,7 @@ namespace kungfu
                 snapshot.color = piece->color();
                 snapshot.logicalPosition = piece->position();
                 snapshot.state = piece->state();
+                snapshot.hasMoved = piece->hasMoved();
 
                 snapshot.cooldownProgress =
                     arbiter.getCooldownProgress(

@@ -11,7 +11,7 @@
 #include "ui/components/BoardView.hpp"
 #include "engine/core/GameEngine.hpp"
 #include "engine/events/IGameObserver.hpp"
-#include "players/human/Controller.hpp"
+#include "players/human/HumanPlayer.hpp"
 #include "engine/snapshot/SnapshotBuilder.hpp"
 #include "engine/io/BoardParser.hpp"
 #include "engine/common/PieceTokenCodec.hpp"
@@ -26,7 +26,7 @@ class ChessGameScreen : public BaseScreen
 {
 private:
     std::shared_ptr<kungfu::GameEngine> m_gameEngine;
-    std::shared_ptr<kungfu::Controller> m_controller;
+    std::shared_ptr<kungfu::HumanPlayer> m_humanPlayer;
     kungfu::GameConfig m_config;
     std::shared_ptr<ISoundPlayer> m_soundPlayer;
     bool m_isPaused = false;
@@ -162,9 +162,9 @@ private:
         auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
 
         m_gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine, m_config);
-        m_controller = std::make_shared<kungfu::Controller>(m_gameEngine);
+        m_humanPlayer = std::make_shared<kungfu::HumanPlayer>(m_gameEngine);
 
-        m_controller->setCellSize(100);
+        m_humanPlayer->setCellSize(100);
 
         struct GameEventObserver : public kungfu::IGameObserver
         {
@@ -335,7 +335,7 @@ protected:
         int rows = board->rows();
         int cols = board->cols();
 
-        auto selectedOpt = m_controller->selectedPosition();
+        auto selectedOpt = m_humanPlayer->selectedPosition();
         
         auto snapshot = kungfu::view::SnapshotBuilder::build(
             *board,
@@ -460,7 +460,7 @@ public:
             m_menuButton->update(deltaTime);
         }
 
-        auto selectedOpt = m_controller->selectedPosition();
+        auto selectedOpt = m_humanPlayer->selectedPosition();
         if (selectedOpt.has_value() && (m_selectedPieceAnim.isJumping || m_isHovering))
         {
             m_selectedPieceAnim.jumpTimer += deltaTime;
@@ -513,13 +513,13 @@ public:
                                     m_lastClickTime = 0.0f;
                                     m_lastClickedTile = BoardPos{-1, -1};
 
-                                    auto selectedOpt = m_controller->selectedPosition();
+                                    auto selectedOpt = m_humanPlayer->selectedPosition();
 
                                     if (!selectedOpt.has_value())
                                     {
                                         int virtualX = col * 100 + 50;
                                         int virtualY = row * 100 + 50;
-                                        m_controller->click(virtualX, virtualY);
+                                        m_humanPlayer->handleClick(virtualX, virtualY);
                                     }
 
                                     m_isHovering = !m_isHovering;
@@ -535,7 +535,7 @@ public:
                                     int virtualY = row * 100 + 50;
 
                                     auto activeColor = m_gameEngine->currentTurn();
-                                    auto selectedBefore = m_controller->selectedPosition();
+                                    auto selectedBefore = m_humanPlayer->selectedPosition();
 
                                     kungfu::PieceType movingPieceType = kungfu::PieceType::Pawn;
                                     if (selectedBefore.has_value())
@@ -561,8 +561,8 @@ public:
                                         }
                                     }
 
-                                    auto result = m_controller->click(virtualX, virtualY);
-                                    auto selectedAfter = m_controller->selectedPosition();
+                                    auto result = m_humanPlayer->handleClick(virtualX, virtualY);
+                                    auto selectedAfter = m_humanPlayer->selectedPosition();
 
                                     if (!selectedBefore.has_value() && selectedAfter.has_value())
                                     {
@@ -577,31 +577,39 @@ public:
                                         m_selectedPieceAnim.jumpTimer = 0.0f;
                                     }
 
-                                    if (result.actionTaken && !result.description.empty())
+                                    if (result.actionTaken && result.from.has_value() && result.to.has_value() && selectedBefore.has_value())
                                     {
-                                        bool isMoveAccepted = (result.description.rfind("Move requested: ok", 0) == 0 ||
-                                                               result.description.rfind("Move requested: jump_started", 0) == 0);
+                                        auto snapshot = kungfu::view::SnapshotBuilder::build(
+                                            *m_gameEngine->getBoard(),
+                                            m_gameEngine->getArbiter(),
+                                            m_gameEngine->getCurrentTimeMs(),
+                                            m_gameEngine->isGameOver(),
+                                            selectedBefore,
+                                            m_boardRangeX / 8);
 
-                                        if (isMoveAccepted && selectedBefore.has_value())
-                                        {
-                                            BoardPos fromPos{selectedBefore->row(), selectedBefore->col()};
-                                            BoardPos toPos{row, col};
-                                            std::string logText = getMoveNotationString(movingPieceType, fromPos, toPos);
+                                        auto requests = m_humanPlayer->decideActions(snapshot);
+                                        if (!requests.empty()) {
+                                            auto actionResults = m_gameEngine->processActionRequests(requests);
+                                            if (!actionResults.empty() && actionResults.front().status == kungfu::ActionStatus::Accepted) {
+                                                BoardPos fromPos{selectedBefore->row(), selectedBefore->col()};
+                                                BoardPos toPos{row, col};
+                                                std::string logText = getMoveNotationString(movingPieceType, fromPos, toPos);
 
-                                            if (activeColor == kungfu::PlayerColor::White)
-                                            {
-                                                m_whiteHistory.push_back(logText);
-                                                if (m_whiteHistory.size() > 8)
+                                                if (activeColor == kungfu::PlayerColor::White)
                                                 {
-                                                    m_whiteHistory.erase(m_whiteHistory.begin());
+                                                    m_whiteHistory.push_back(logText);
+                                                    if (m_whiteHistory.size() > 8)
+                                                    {
+                                                        m_whiteHistory.erase(m_whiteHistory.begin());
+                                                    }
                                                 }
-                                            }
-                                            else
-                                            {
-                                                m_blackHistory.push_back(logText);
-                                                if (m_blackHistory.size() > 8)
+                                                else
                                                 {
-                                                    m_blackHistory.erase(m_blackHistory.begin());
+                                                    m_blackHistory.push_back(logText);
+                                                    if (m_blackHistory.size() > 8)
+                                                    {
+                                                        m_blackHistory.erase(m_blackHistory.begin());
+                                                    }
                                                 }
                                             }
                                         }

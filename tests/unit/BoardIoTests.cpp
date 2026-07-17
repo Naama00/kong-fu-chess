@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include "core/io/BoardParser.hpp"
-#include "core/io/BoardPrinter.hpp"
+#include "engine/io/BoardParser.hpp"
+#include "engine/io/BoardPrinter.hpp"
 
 TEST_CASE("Board Parser and Printer Integration", "[io]") {
     

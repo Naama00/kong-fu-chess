@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include "core/input/Controller.hpp"
-#include "core/engine/IGameEngine.hpp"
+#include "players/human/Controller.hpp"
+#include "engine/core/IGameEngine.hpp"
 #include <vector>
 #include <algorithm>
 
@@ -38,6 +38,11 @@ public:
         lastMoveTo_ = to;
         moveCount_++;
         return nextMoveResult_;
+    }
+
+    std::vector<kungfu::ActionResult> processActionRequests(const std::vector<kungfu::ActionRequest>& requests) override {
+        (void)requests;
+        return {};
     }
 
     bool hasPieceAt(const kungfu::Position& pos) const override {

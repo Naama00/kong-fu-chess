@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
-#include "core/board/Board.hpp"
-#include "core/io/BoardParser.hpp"
-#include "core/rules/RuleEngine.hpp"
-#include "core/engine/GameEngine.hpp"
+#include "engine/board/Board.hpp"
+#include "engine/io/BoardParser.hpp"
+#include "engine/rules/RuleEngine.hpp"
+#include "engine/core/GameEngine.hpp"
 
 namespace {
 
@@ -19,7 +19,7 @@ public:
 TEST_CASE("GameEngine Supports Injectable Promotion Rules", "[engine][promotion]") {
     std::string boardStr =
         ". . .\n"
-        "wP . .\n"
+        "bP . .\n" // Black Pawn moves +1 to row 2
         ". . .\n";
 
     auto board = kungfu::BoardParser::parse(boardStr);
@@ -42,8 +42,8 @@ TEST_CASE("GameEngine Supports Injectable Promotion Rules", "[engine][promotion]
 TEST_CASE("Pawn Promotion to Queen on Last Row", "[engine][promotion]") {
     std::string boardStr =
         ". . .\n"
-        "wP . .\n"
-        ". . .\n"; // לוח 3x3. השורה האחרונה עבור לבן היא שורה 2.
+        "bP . .\n" // Black Pawn moves +1 to row 2 (last row)
+        ". . .\n"; // לוח 3x3. השורה האחרונה עבור שחור היא שורה 2.
 
     auto board = kungfu::BoardParser::parse(boardStr);
     REQUIRE(board != nullptr);
@@ -63,7 +63,7 @@ TEST_CASE("Pawn Promotion to Queen on Last Row", "[engine][promotion]") {
 TEST_CASE("Promoted Piece Gets Its Own Fresh Cooldown, Independent of the Original Pawn", "[engine][promotion]") {
     std::string boardStr =
         ". . .\n"
-        "wP . .\n"
+        "bP . .\n"
         ". . .\n";
 
     auto board = kungfu::BoardParser::parse(boardStr);
@@ -91,7 +91,7 @@ TEST_CASE("Promoted Piece Gets Its Own Fresh Cooldown, Independent of the Origin
 TEST_CASE("Promotion Does Not Leave Orphaned Cooldown Entries", "[engine][promotion]") {
     std::string boardStr =
         ". . .\n"
-        "wP . .\n"
+        "bP . .\n"
         ". . .\n";
 
     auto board = kungfu::BoardParser::parse(boardStr);

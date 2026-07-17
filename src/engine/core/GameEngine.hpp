@@ -27,6 +27,7 @@ public:
                std::shared_ptr<IPromotionRule> promotionRule = std::make_shared<ChessPromotionRule>()) noexcept;
 
     MoveResult requestMove(const Position& from, const Position& to) override;
+    std::vector<ActionResult> processActionRequests(const std::vector<ActionRequest>& requests) override;
     bool hasPieceAt(const Position& pos) const override;
     int getBoardRows() const override;
     int getBoardCols() const override;

@@ -7,8 +7,11 @@ Controller::Controller(std::shared_ptr<IGameEngine> engine, int cellSize)
     : engine_(std::move(engine)), mapper_(cellSize), selectedPosition_(std::nullopt) {}
 
 ControllerResult Controller::click(int x, int y) {
+    ControllerResult result{false, "", std::nullopt, std::nullopt, std::nullopt};
+
     if (!engine_) {
-        return {false, "Engine reference is null"};
+        result.description = "Engine reference is null";
+        return result;
     }
 
     int rows = engine_->getBoardRows();
@@ -17,7 +20,8 @@ ControllerResult Controller::click(int x, int y) {
 
     // 1. קליק מחוץ לגבולות הלוח - התעלמות מוחלטת (אינו מבטל סימון קיים)
     if (!cellOpt.has_value()) {
-        return {false, "Click outside board ignored"};
+        result.description = "Click outside board ignored";
+        return result;
     }
 
     Position targetCell = cellOpt.value();
@@ -48,9 +52,12 @@ ControllerResult Controller::click(int x, int y) {
             if (engine_->hasPieceAt(targetCell)) {
                 selectedPosition_ = targetCell;
                 selectedColor_ = engine_->getPieceColorAt(targetCell);
-                return {true, "Stale selection cleared; new piece selected"};
+                result.actionTaken = true;
+                result.description = "Stale selection cleared; new piece selected";
+                return result;
             }
-            return {false, "Stale selection cleared"};
+            result.description = "Stale selection cleared";
+            return result;
         }
 
         // מחליפים את הסימון רק אם לחצנו על כלי ידידותי אחר
@@ -59,32 +66,42 @@ ControllerResult Controller::click(int x, int y) {
             if (targetColor.has_value() && targetColor.value() == selectedColor_.value()) {
                 selectedPosition_ = targetCell;
                 selectedColor_ = targetColor;
-                return {true, "Piece selection replaced"};
+                result.actionTaken = true;
+                result.description = "Piece selection replaced";
+                return result;
             }
         }
 
-        // שליחת בקשת התנועה למנוע המשחק (כעת, לחיצה שנייה על אותו כלי תגיע לכאן ותפעיל קפיצה!)
+        // שליחת בקשת התנועה למנוע המשחק; האימות/ביצוע יבוצעו מאוחר יותר דרך GameEngine
         auto moveResult = engine_->requestMove(from, targetCell);
-        
-        // פינוי הסימון באופן מיידי לאחר הניסיון
+        auto selectedColor = selectedColor_;
         clearSelection();
 
+        result.actionTaken = true;
+        result.from = from;
+        result.to = targetCell;
+        result.playerColor = selectedColor;
+
         if (moveResult.isAccepted) {
-            return {true, "Move requested: " + moveResult.reason};
+            result.description = "Move requested: " + moveResult.reason;
         } else {
-            return {true, "Move rejected: " + moveResult.reason};
+            result.description = "Move rejected: " + moveResult.reason;
         }
+        return result;
     }
 
     // 3. קליק בתוך הלוח ללא כלי מסומן כרגע (קליק ראשון)
     if (engine_->hasPieceAt(targetCell)) {
         selectedPosition_ = targetCell;
         selectedColor_ = engine_->getPieceColorAt(targetCell);
-        return {true, "Piece selected"};
+        result.actionTaken = true;
+        result.description = "Piece selected";
+        return result;
     }
 
     // התעלמות מקליק ראשון על משבצת ריקה
-    return {false, "Click on empty cell ignored"};
+    result.description = "Click on empty cell ignored";
+    return result;
 }
 
 std::optional<Position> Controller::selectedPosition() const noexcept {
