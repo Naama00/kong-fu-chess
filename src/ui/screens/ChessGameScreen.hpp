@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ui/framework/BaseScreen.hpp"
+#include "ui/screens/BaseScreen.hpp"
 #include "ui/framework/ScreenManager.hpp"
 #include "ui/framework/ISoundPlayer.hpp"
 #include "ui/components/Button.hpp"
