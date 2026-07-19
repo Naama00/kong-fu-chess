@@ -133,12 +133,22 @@ namespace kungfu
                 NetworkMovePacket packet;
                 std::memcpy(&packet, payload.data(), sizeof(NetworkMovePacket));
 
-                // תרגום חבילת המהלך שנשלחה מהשרת לבקשת מנוע מקומית
                 ActionRequest request = Serializer::deserializeToRequest(packet);
 
-                // הוספה בצורה בטוחה לתור המהלכים הממתינים
                 std::lock_guard<std::mutex> lock(m_mutex);
                 m_incomingActions.push_back(request);
+            }
+        }
+        // טיפול בתוצאת אימות המהלך שהתקבלה מהשרת
+        else if (type == NetworkMessageType::MOVE_RESULT)
+        {
+            if (payload.size() >= sizeof(ActionResult))
+            {
+                ActionResult result(0, ActionStatus::Rejected);
+                std::memcpy(&result, payload.data(), sizeof(ActionResult));
+
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_incomingResults.push_back(result);
             }
         }
     }
@@ -149,7 +159,7 @@ namespace kungfu
             return;
 
         NetworkMovePacket packet;
-        packet.matchId = m_matchId.load(); 
+        packet.matchId = m_matchId.load();
         packet.requestId = m_nextRequestId++;
         packet.playerColor = static_cast<std::uint8_t>(m_assignedColor.load());
 
@@ -171,19 +181,22 @@ namespace kungfu
     {
         std::uint32_t payloadSize = static_cast<std::uint32_t>(payload.size());
 
-        std::vector<std::uint8_t> writeBuffer;
-        writeBuffer.resize(5 + payloadSize);
+        // הקצאה דינמית מנוהלת כדי להבטיח את קיום הזיכרון לאורך כל פעולת השליחה
+        auto writeBuffer = std::make_shared<std::vector<std::uint8_t>>();
+        writeBuffer->resize(5 + payloadSize);
 
-        writeBuffer[0] = static_cast<std::uint8_t>(type);
-        std::memcpy(&writeBuffer[1], &payloadSize, sizeof(payloadSize));
+        (*writeBuffer)[0] = static_cast<std::uint8_t>(type);
+        std::memcpy(writeBuffer->data() + 1, &payloadSize, sizeof(payloadSize));
 
         if (payloadSize > 0)
         {
-            std::memcpy(&writeBuffer[5], payload.data(), payloadSize);
+            std::memcpy(writeBuffer->data() + 5, payload.data(), payloadSize);
         }
 
         auto self = shared_from_this();
-        boost::asio::async_write(m_socket, boost::asio::buffer(writeBuffer),
+        // אנו מעבירים את ה-buffer שמצביע ל-shared_ptr, ותופסים את writeBuffer עצמו בתוך ה-Lambda
+        // הדבר מבטיח שהזיכרון יישאר בחיים כל עוד פעולת הרישום האסינכרונית נמשכת ברשת
+        boost::asio::async_write(m_socket, boost::asio::buffer(*writeBuffer),
                                  boost::asio::bind_executor(m_strand,
                                                             [self, writeBuffer](boost::system::error_code ec, std::size_t)
                                                             {

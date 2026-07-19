@@ -32,23 +32,36 @@ void PremoveQueue::replacePiece(const PiecePtr& oldPiece, const PiecePtr& newPie
     }
 }
 
+// מימוש בטוח המונע לחלוטין Iterator Invalidation
 void PremoveQueue::processReady(const PieceBusyPredicate& isBusy, const MoveExecutor& execute) {
-    for (auto it = entries_.begin(); it != entries_.end(); ) {
-        auto piece = it->first;
-        auto to = it->second;
+    std::vector<std::pair<PiecePtr, Position>> readyToExecute;
+    std::vector<std::pair<PiecePtr, Position>> remainingEntries;
+
+    // 1. סינון ראשוני של האיברים ללא מניפולציה ישירה של האיטרטורים בזמן הריצה
+    for (const auto& entry : entries_) {
+        auto piece = entry.first;
 
         if (!piece || piece->state() == PieceState::Captured) {
-            it = entries_.erase(it);
+            // כלי שנלכד - נמחק אוטומטית (לא נכנס לאף אחד מהמערכים)
             continue;
         }
 
         if (!isBusy(piece)) {
-            execute(piece->position(), to);
-            it = entries_.erase(it);
-            continue;
+            readyToExecute.push_back(entry);
+        } else {
+            remainingEntries.push_back(entry);
         }
+    }
 
-        ++it;
+    // 2. עדכון התור המרכזי למצב היציב החדש שלו
+    entries_ = std::move(remainingEntries);
+
+    // 3. ביצוע המהלכים מתוך מערך מקומי יציב. 
+    // גם אם execute יגרור רישום של pre-move חדש, הוא יתווסף בצורה בטוחה ל-entries_ החדש
+    for (const auto& entry : readyToExecute) {
+        if (entry.first && entry.first->state() != PieceState::Captured) {
+            execute(entry.first->position(), entry.second);
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+// players/network/NetworkPlayer.hpp
 #pragma once
 
 #include <boost/asio.hpp>
@@ -8,10 +9,10 @@
 #include <atomic>
 #include "players/IPlayer.hpp"
 #include "../../server/NetworkMessages.hpp"
+#include "../../engine/actions/ActionResult.hpp" // הוספת ייבוא עבור תוצאות פעולה
 
 namespace kungfu
 {
-
     using boost::asio::ip::tcp;
 
     class NetworkPlayer : public IPlayer, public std::enable_shared_from_this<NetworkPlayer>
@@ -30,9 +31,12 @@ namespace kungfu
 
         // תור מוגן חוטים לאחסון מהלכים שהגיעו מהשרת
         std::vector<ActionRequest> m_incomingActions;
+        
+        // תור מוגן חוטים לאחסון תוצאות אימות מהלכים מהשרת
+        std::vector<ActionResult> m_incomingResults;
+        
         std::mutex m_mutex;
 
-        // מאגרי זיכרון לקריאת המידע מהרשת
         std::vector<std::uint8_t> m_headerBuffer;
         std::vector<std::uint8_t> m_payloadBuffer;
 
@@ -42,13 +46,18 @@ namespace kungfu
         NetworkPlayer(boost::asio::io_context &ioContext, const std::string &host, const std::string &port);
         ~NetworkPlayer() override;
 
-        // התחברות לשרת ושליחת בקשת הצטרפות למשחק (Matchmaking)
         void connectAndJoin();
 
-        // מימוש מתודת הממשק התקני של IPlayer
         std::vector<ActionRequest> decideActions(const view::GameSnapshot &snapshot) override;
 
-        // שליחת מהלך שבוצע מקומית אל השרת
+        // מתודה לשליפת תוצאות האימות וניקוי התור המקומי באותו פריים
+        std::vector<ActionResult> pollResults() {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            auto results = m_incomingResults;
+            m_incomingResults.clear();
+            return results;
+        }
+
         void sendMoveToServer(const PlayerAction &action);
 
         bool isConnected() const { return m_connected; }
@@ -64,5 +73,4 @@ namespace kungfu
         void writePacket(NetworkMessageType type, const std::vector<std::uint8_t> &payload);
         void handleDisconnect();
     };
-
 } // namespace kungfu

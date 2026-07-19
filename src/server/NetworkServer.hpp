@@ -119,18 +119,19 @@ private:
     void writePacket(NetworkMessageType type, const std::vector<std::uint8_t>& payload) {
         std::uint32_t payloadSize = static_cast<std::uint32_t>(payload.size());
         
-        std::vector<std::uint8_t> writeBuffer;
-        writeBuffer.resize(5 + payloadSize);
+        // הקצאה דינמית של ה-Buffer כדי למנוע הרס מוקדם שלו
+        auto writeBuffer = std::make_shared<std::vector<std::uint8_t>>();
+        writeBuffer->resize(5 + payloadSize);
         
-        writeBuffer[0] = static_cast<std::uint8_t>(type);
-        std::memcpy(&writeBuffer[1], &payloadSize, sizeof(payloadSize));
+        (*writeBuffer)[0] = static_cast<std::uint8_t>(type);
+        std::memcpy(writeBuffer->data() + 1, &payloadSize, sizeof(payloadSize));
         
         if (payloadSize > 0) {
-            std::memcpy(&writeBuffer[5], payload.data(), payloadSize);
+            std::memcpy(writeBuffer->data() + 5, payload.data(), payloadSize);
         }
 
         auto self = shared_from_this();
-        boost::asio::async_write(m_socket, boost::asio::buffer(writeBuffer),
+        boost::asio::async_write(m_socket, boost::asio::buffer(*writeBuffer),
             boost::asio::bind_executor(m_strand,
             [self, writeBuffer](boost::system::error_code ec, std::size_t) {
                 if (ec) {
@@ -193,10 +194,12 @@ inline void LiveMatch::handlePlayerMove(std::shared_ptr<NetworkSession> sender, 
             auto white = m_whiteSession.lock();
             auto black = m_blackSession.lock();
 
-            if (sender == white && black) {
-                black->sendPacket(NetworkMessageType::GAME_MOVE, movePayload);
-            } else if (sender == black && white) {
+            // שליחת עדכון התנועה לכל השחקנים המחוברים למשחק (גם ליוזם וגם ליריב)
+            if (white) {
                 white->sendPacket(NetworkMessageType::GAME_MOVE, movePayload);
+            }
+            if (black) {
+                black->sendPacket(NetworkMessageType::GAME_MOVE, movePayload);
             }
         }
     }

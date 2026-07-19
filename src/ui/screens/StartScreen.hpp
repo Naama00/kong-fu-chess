@@ -1,3 +1,4 @@
+// ui/screens/StartScreen.hpp
 #pragma once
 #include "ui/screens/BaseScreen.hpp"
 #include "ui/framework/ISoundPlayer.hpp"
@@ -8,37 +9,32 @@
 class StartScreen : public BaseScreen
 {
 public:
-    enum class GameMode
-    {
-        Simultaneous, // קונג-פו שחמט (זמן אמת)
-        Classic       // שחמט רגיל
-    };
-
-    enum class OpponentType
-    {
-        LocalPlayer, // שחקן מקומי (PvP)
-        AI           // מחשב (PvC)
-    };
+    enum class GameMode { Simultaneous, Classic };
+    enum class OpponentType { LocalPlayer, AI, Online }; // הוספת מצב Online
 
 private:
     Vector2D m_mousePos{0.0f, 0.0f};
     GameMode m_selectedMode{GameMode::Simultaneous};
     OpponentType m_selectedOpponent{OpponentType::AI};
-    ChessGameScreen::AiDifficulty m_selectedDifficulty{ChessGameScreen::AiDifficulty::Medium}; // משתנה רמת קושי
+    ChessGameScreen::AiDifficulty m_selectedDifficulty{ChessGameScreen::AiDifficulty::Medium};
     std::shared_ptr<ISoundPlayer> m_soundPlayer;
 
     // הגדרות גיאומטריות של כפתורי הבחירה והפעולה
     const Vector2D m_btnSize{260.0f, 55.0f};
     const Vector2D m_modeBtnSize{125.0f, 45.0f};
-    const Vector2D m_difficultyBtnSize{80.0f, 45.0f};
+    
+    // הגדרת הממדים עבור כפתורי היריבים וכפתורי רמת הקושי
+    const Vector2D m_opponentBtnSize{80.0f, 45.0f};    // כפתורי יריבים
+    const Vector2D m_difficultyBtnSize{80.0f, 45.0f};  // כפתורי רמת קושי (המשתנה החסר)
 
     // מיקומי בחירת מצב משחק
     const Vector2D m_simulModePos{365.0f, 320.0f};
     const Vector2D m_classicModePos{500.0f, 320.0f};
 
-    // מיקומי בחירת יריב
+    // מיקומי בחירת יריב (שלושה כפתורים אופקיים)
     const Vector2D m_pvpOpponentPos{365.0f, 420.0f};
-    const Vector2D m_aiOpponentPos{500.0f, 420.0f};
+    const Vector2D m_aiOpponentPos{455.0f, 420.0f};
+    const Vector2D m_onlineOpponentPos{545.0f, 420.0f};
 
     // מיקומי בחירת רמת קושי
     const Vector2D m_easyDifficultyPos{365.0f, 520.0f};
@@ -48,7 +44,7 @@ private:
     // מיקומי כפתורי שליטה ראשיים
     const Vector2D m_playBtnPos{365.0f, 620.0f};
     const Vector2D m_exitBtnPos{365.0f, 690.0f};
-
+    
     void drawWelcomeMessage(IRenderer &renderer)
     {
         renderer.drawText("KUNG-FU CHESS", {280.0f, 220.0f}, 42, m_theme.titleText);
@@ -62,14 +58,12 @@ private:
         bool simulHovered = isPointInRect(m_mousePos, m_simulModePos, m_modeBtnSize);
         bool classicHovered = isPointInRect(m_mousePos, m_classicModePos, m_modeBtnSize);
 
-        // כפתור מצב סימולטני
         bool isSimulActive = (m_selectedMode == GameMode::Simultaneous);
         Color simulColor = isSimulActive ? m_theme.buttonHover : (simulHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
         renderer.drawRectangle(m_simulModePos, m_modeBtnSize, simulColor, true);
         renderer.drawRectangle(m_simulModePos, m_modeBtnSize, m_theme.border, false);
         renderer.drawText("Real-Time", {m_simulModePos.x + 15.0f, m_simulModePos.y + 28.0f}, 14, m_theme.bodyText);
 
-        // כפתור מצב קלאסי
         bool isClassicActive = (m_selectedMode == GameMode::Classic);
         Color classicColor = isClassicActive ? m_theme.buttonHover : (classicHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
         renderer.drawRectangle(m_classicModePos, m_modeBtnSize, classicColor, true);
@@ -81,22 +75,30 @@ private:
     {
         renderer.drawText("Select Opponent:", {365.0f, 395.0f}, 16, m_theme.bodyText);
 
-        bool pvpHovered = isPointInRect(m_mousePos, m_pvpOpponentPos, m_modeBtnSize);
-        bool aiHovered = isPointInRect(m_mousePos, m_aiOpponentPos, m_modeBtnSize);
+        bool pvpHovered = isPointInRect(m_mousePos, m_pvpOpponentPos, m_opponentBtnSize);
+        bool aiHovered = isPointInRect(m_mousePos, m_aiOpponentPos, m_opponentBtnSize);
+        bool onlineHovered = isPointInRect(m_mousePos, m_onlineOpponentPos, m_opponentBtnSize);
 
-        // כפתור מצב שחקן מקומי
+        // כפתור מקומי
         bool isPvpActive = (m_selectedOpponent == OpponentType::LocalPlayer);
         Color pvpColor = isPvpActive ? m_theme.buttonHover : (pvpHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
-        renderer.drawRectangle(m_pvpOpponentPos, m_modeBtnSize, pvpColor, true);
-        renderer.drawRectangle(m_pvpOpponentPos, m_modeBtnSize, m_theme.border, false);
-        renderer.drawText("Local PvP", {m_pvpOpponentPos.x + 20.0f, m_pvpOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
+        renderer.drawRectangle(m_pvpOpponentPos, m_opponentBtnSize, pvpColor, true);
+        renderer.drawRectangle(m_pvpOpponentPos, m_opponentBtnSize, m_theme.border, false);
+        renderer.drawText("Local", {m_pvpOpponentPos.x + 18.0f, m_pvpOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
 
-        // כפתור מצב שחקן מול ה-AI
+        // כפתור מול מחשב
         bool isAiActive = (m_selectedOpponent == OpponentType::AI);
         Color aiColor = isAiActive ? m_theme.buttonHover : (aiHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
-        renderer.drawRectangle(m_aiOpponentPos, m_modeBtnSize, aiColor, true);
-        renderer.drawRectangle(m_aiOpponentPos, m_modeBtnSize, m_theme.border, false);
-        renderer.drawText("vs Computer", {m_aiOpponentPos.x + 13.0f, m_aiOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
+        renderer.drawRectangle(m_aiOpponentPos, m_opponentBtnSize, aiColor, true);
+        renderer.drawRectangle(m_aiOpponentPos, m_opponentBtnSize, m_theme.border, false);
+        renderer.drawText("vs AI", {m_aiOpponentPos.x + 18.0f, m_aiOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
+
+        // כפתור משחק רשת
+        bool isOnlineActive = (m_selectedOpponent == OpponentType::Online);
+        Color onlineColor = isOnlineActive ? m_theme.buttonHover : (onlineHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
+        renderer.drawRectangle(m_onlineOpponentPos, m_opponentBtnSize, onlineColor, true);
+        renderer.drawRectangle(m_onlineOpponentPos, m_opponentBtnSize, m_theme.border, false);
+        renderer.drawText("Online", {m_onlineOpponentPos.x + 15.0f, m_onlineOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
     }
 
     void drawDifficultySelector(IRenderer &renderer)
@@ -110,21 +112,18 @@ private:
         bool mediumHovered = isPointInRect(m_mousePos, m_mediumDifficultyPos, m_difficultyBtnSize);
         bool hardHovered = isPointInRect(m_mousePos, m_hardDifficultyPos, m_difficultyBtnSize);
 
-        // Easy
         bool isEasyActive = (m_selectedDifficulty == ChessGameScreen::AiDifficulty::Easy);
         Color easyColor = isEasyActive ? m_theme.buttonHover : (easyHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
         renderer.drawRectangle(m_easyDifficultyPos, m_difficultyBtnSize, easyColor, true);
         renderer.drawRectangle(m_easyDifficultyPos, m_difficultyBtnSize, m_theme.border, false);
         renderer.drawText("Easy", {m_easyDifficultyPos.x + 18.0f, m_easyDifficultyPos.y + 28.0f}, 14, m_theme.bodyText);
 
-        // Medium
         bool isMediumActive = (m_selectedDifficulty == ChessGameScreen::AiDifficulty::Medium);
         Color mediumColor = isMediumActive ? m_theme.buttonHover : (mediumHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
         renderer.drawRectangle(m_mediumDifficultyPos, m_difficultyBtnSize, mediumColor, true);
         renderer.drawRectangle(m_mediumDifficultyPos, m_difficultyBtnSize, m_theme.border, false);
         renderer.drawText("Med", {m_mediumDifficultyPos.x + 22.0f, m_mediumDifficultyPos.y + 28.0f}, 14, m_theme.bodyText);
 
-        // Hard
         bool isHardActive = (m_selectedDifficulty == ChessGameScreen::AiDifficulty::Hard);
         Color hardColor = isHardActive ? m_theme.buttonHover : (hardHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
         renderer.drawRectangle(m_hardDifficultyPos, m_difficultyBtnSize, hardColor, true);
@@ -166,10 +165,7 @@ public:
     void onEnter() override {}
     void onExit() override {}
 
-    void update(float deltaTime) override
-    {
-        (void)deltaTime;
-    }
+    void update(float deltaTime) override { (void)deltaTime; }
 
     void handleInput(const std::vector<InputEvent> &events) override
     {
@@ -189,13 +185,17 @@ public:
                     {
                         m_selectedMode = GameMode::Classic;
                     }
-                    else if (isPointInRect(m_mousePos, m_pvpOpponentPos, m_modeBtnSize))
+                    else if (isPointInRect(m_mousePos, m_pvpOpponentPos, m_opponentBtnSize))
                     {
                         m_selectedOpponent = OpponentType::LocalPlayer;
                     }
-                    else if (isPointInRect(m_mousePos, m_aiOpponentPos, m_modeBtnSize))
+                    else if (isPointInRect(m_mousePos, m_aiOpponentPos, m_opponentBtnSize))
                     {
                         m_selectedOpponent = OpponentType::AI;
+                    }
+                    else if (isPointInRect(m_mousePos, m_onlineOpponentPos, m_opponentBtnSize))
+                    {
+                        m_selectedOpponent = OpponentType::Online;
                     }
                     else if (m_selectedOpponent == OpponentType::AI && isPointInRect(m_mousePos, m_easyDifficultyPos, m_difficultyBtnSize))
                     {
@@ -213,8 +213,10 @@ public:
                     {
                         bool isSimultaneous = (m_selectedMode == GameMode::Simultaneous);
                         bool isAiOpponent = (m_selectedOpponent == OpponentType::AI);
+                        bool isNetworkMode = (m_selectedOpponent == OpponentType::Online);
+
                         m_screenManager.pushScreen(std::make_unique<ChessGameScreen>(
-                            m_screenManager, isSimultaneous, isAiOpponent, m_selectedDifficulty, m_soundPlayer));
+                            m_screenManager, isSimultaneous, isAiOpponent, m_selectedDifficulty, m_soundPlayer, isNetworkMode));
                     }
                     else if (isPointInRect(m_mousePos, m_exitBtnPos, m_btnSize))
                     {

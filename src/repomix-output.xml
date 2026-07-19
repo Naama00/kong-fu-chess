@@ -141,6 +141,7 @@ players/
     NetworkPlayer.hpp
   IPlayer.hpp
 server/
+  LiveMatch.hpp
   main.cpp
   MatchManager.hpp
   NetworkMessages.hpp
@@ -1749,23 +1750,36 @@ void PremoveQueue::replacePiece(const PiecePtr& oldPiece, const PiecePtr& newPie
     }
 }
 
+// מימוש בטוח המונע לחלוטין Iterator Invalidation
 void PremoveQueue::processReady(const PieceBusyPredicate& isBusy, const MoveExecutor& execute) {
-    for (auto it = entries_.begin(); it != entries_.end(); ) {
-        auto piece = it->first;
-        auto to = it->second;
+    std::vector<std::pair<PiecePtr, Position>> readyToExecute;
+    std::vector<std::pair<PiecePtr, Position>> remainingEntries;
+
+    // 1. סינון ראשוני של האיברים ללא מניפולציה ישירה של האיטרטורים בזמן הריצה
+    for (const auto& entry : entries_) {
+        auto piece = entry.first;
 
         if (!piece || piece->state() == PieceState::Captured) {
-            it = entries_.erase(it);
+            // כלי שנלכד - נמחק אוטומטית (לא נכנס לאף אחד מהמערכים)
             continue;
         }
 
         if (!isBusy(piece)) {
-            execute(piece->position(), to);
-            it = entries_.erase(it);
-            continue;
+            readyToExecute.push_back(entry);
+        } else {
+            remainingEntries.push_back(entry);
         }
+    }
 
-        ++it;
+    // 2. עדכון התור המרכזי למצב היציב החדש שלו
+    entries_ = std::move(remainingEntries);
+
+    // 3. ביצוע המהלכים מתוך מערך מקומי יציב. 
+    // גם אם execute יגרור רישום של pre-move חדש, הוא יתווסף בצורה בטוחה ל-entries_ החדש
+    for (const auto& entry : readyToExecute) {
+        if (entry.first && entry.first->state() != PieceState::Captured) {
+            execute(entry.first->position(), entry.second);
+        }
     }
 }
 
@@ -5565,135 +5579,308 @@ struct InputConfig {
 #include "NetworkPlayer.hpp"
 #include "../../server/Serializer.hpp"
 #include <iostream>
+#include <cstring>
 
-namespace kungfu {
+namespace kungfu
+{
 
-NetworkPlayer::NetworkPlayer(boost::asio::io_context& ioContext, const std::string& host, const std::string& port)
-    : m_ioContext(ioContext), m_socket(ioContext), m_host(host), m_port(port), m_matchId(0), m_assignedColor(0) {}
+    NetworkPlayer::NetworkPlayer(boost::asio::io_context &ioContext, const std::string &host, const std::string &port)
+        : m_ioContext(ioContext),
+          m_socket(ioContext),
+          m_strand(boost::asio::make_strand(m_socket.get_executor())),
+          m_host(host),
+          m_port(port)
+    {
+        m_headerBuffer.resize(5); // כותרת בגודל קבוע: בית אחד לסוג, 4 בתים לאורך
+    }
 
-void NetworkPlayer::connectAndJoin() {
-    tcp::resolver resolver(m_ioContext);
-    auto endpoints = resolver.resolve(m_host, m_port);
+    NetworkPlayer::~NetworkPlayer()
+    {
+        boost::system::error_code ec;
+        m_socket.close(ec);
+    }
 
-    boost::asio::async_connect(m_socket, endpoints,
-        [this](boost::system::error_code ec, tcp::endpoint) {
-            if (!ec) {
-                std::cout << "Connected to game server successfully!" << std::endl;
-                
-                // שליחת בקשת הצטרפות ראשונית לשרת
-                NetworkHeader header{ NetworkMessageType::JOIN_MATCH_REQUEST, 0 };
-                auto buffer = Serializer::serializeHeader(header);
-                
-                boost::asio::async_write(m_socket, boost::asio::buffer(buffer),
-                    [this](boost::system::error_code writeEc, size_t) {
-                        if (!writeEc) {
-                            // מתחילים להאזין לתשובות מהשרת (כמו MATCH_FOUND)
-                            listenForServerResponse();
-                        }
-                    });
-            } else {
-                std::cerr << "Connection failed: " << ec.message() << std::endl;
-            }
-        });
+    void NetworkPlayer::connectAndJoin()
+    {
+        auto self = shared_from_this();
+        boost::asio::post(m_strand, [self]()
+                          { self->doConnect(); });
+    }
+
+    void NetworkPlayer::doConnect()
+    {
+        tcp::resolver resolver(m_ioContext);
+        auto endpoints = resolver.resolve(m_host, m_port);
+        auto self = shared_from_this();
+
+        boost::asio::async_connect(m_socket, endpoints,
+                                   boost::asio::bind_executor(m_strand,
+                                                              [self](boost::system::error_code ec, const tcp::endpoint &)
+                                                              {
+                                                                  if (!ec)
+                                                                  {
+                                                                      std::cout << "[Client] Connected to game server successfully!" << std::endl;
+                                                                      self->m_connected = true;
+                                                                      self->sendJoinRequest();
+                                                                      self->readHeader();
+                                                                  }
+                                                                  else
+                                                                  {
+                                                                      std::cerr << "[Client] Connection failed: " << ec.message() << std::endl;
+                                                                      self->m_connected = false;
+                                                                  }
+                                                              }));
+    }
+
+    void NetworkPlayer::sendJoinRequest()
+    {
+        // שלח בקשה מסוג JOIN_MATCH_REQUEST עם גוף ריק (payloadSize = 0)
+        writePacket(NetworkMessageType::JOIN_MATCH_REQUEST, {});
+    }
+
+    void NetworkPlayer::readHeader()
+    {
+        auto self = shared_from_this();
+        boost::asio::async_read(m_socket, boost::asio::buffer(m_headerBuffer),
+                                boost::asio::bind_executor(m_strand,
+                                                           [self](boost::system::error_code ec, std::size_t)
+                                                           {
+                                                               if (!ec)
+                                                               {
+                                                                   NetworkMessageType type = static_cast<NetworkMessageType>(self->m_headerBuffer[0]);
+
+                                                                   std::uint32_t payloadSize = 0;
+                                                                   std::memcpy(&payloadSize, &self->m_headerBuffer[1], sizeof(payloadSize));
+
+                                                                   self->readPayload(type, payloadSize);
+                                                               }
+                                                               else
+                                                               {
+                                                                   self->handleDisconnect();
+                                                               }
+                                                           }));
+    }
+
+    void NetworkPlayer::readPayload(NetworkMessageType type, std::uint32_t payloadSize)
+    {
+        auto self = shared_from_this();
+
+        if (payloadSize == 0)
+        {
+            processMessage(type, {});
+            readHeader();
+            return;
+        }
+
+        m_payloadBuffer.resize(payloadSize);
+        boost::asio::async_read(m_socket, boost::asio::buffer(m_payloadBuffer),
+                                boost::asio::bind_executor(m_strand,
+                                                           [self, type](boost::system::error_code ec, std::size_t)
+                                                           {
+                                                               if (!ec)
+                                                               {
+                                                                   self->processMessage(type, self->m_payloadBuffer);
+                                                                   self->readHeader();
+                                                               }
+                                                               else
+                                                               {
+                                                                   self->handleDisconnect();
+                                                               }
+                                                           }));
+    }
+
+    void NetworkPlayer::processMessage(NetworkMessageType type, const std::vector<std::uint8_t> &payload)
+{
+    if (type == NetworkMessageType::MATCH_FOUND)
+    {
+        if (payload.size() >= 9)
+        {
+            std::memcpy(&m_matchId, payload.data(), 8);
+            std::uint8_t colorVal = payload[8];
+            m_assignedColor = static_cast<PlayerColor>(colorVal);
+
+            std::cout << "[Client] Match found! ID: " << m_matchId
+                      << " Color: " << (m_assignedColor == PlayerColor::White ? "White" : "Black")
+                      << std::endl;
+        }
+    }
+    else if (type == NetworkMessageType::GAME_MOVE)
+    {
+        if (payload.size() >= sizeof(NetworkMovePacket))
+        {
+            NetworkMovePacket packet;
+            std::memcpy(&packet, payload.data(), sizeof(NetworkMovePacket));
+
+            ActionRequest request = Serializer::deserializeToRequest(packet);
+
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_incomingActions.push_back(request);
+        }
+    }
+    // טיפול בתוצאת אימות המהלך שהתקבלה מהשרת
+    else if (type == NetworkMessageType::MOVE_RESULT)
+    {
+        if (payload.size() >= sizeof(ActionResult))
+        {
+            ActionResult result(0, ActionStatus::Rejected);
+            std::memcpy(&result, payload.data(), sizeof(ActionResult));
+
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_incomingResults.push_back(result);
+        }
+    }
 }
 
-void NetworkPlayer::decideAction(std::uint64_t requestId, std::function<void(PlayerAction)> callback) {
-    // מנוע המשחק המקומי מבקש מהשחקן הזה לבצע מהלך.
-    // מכיוון שמדובר בשחקן רשת, אנחנו שומרים את ה-Callback ומחכים שהמהלך יגיע מהסוקט.
-    m_pendingActionCallback = callback;
-}
 
-void NetworkPlayer::onActionResult(const ActionResult& result) {
-    // עדכון השחקן המקומי לגבי תוצאת המהלך האחרון שבוצע
-    // כאן נשלח הודעה מסוג MOVE_RESULT לשרת במידת הצורך
-}
+    void NetworkPlayer::sendMoveToServer(const PlayerAction &action)
+    {
+        if (!m_connected || m_matchId == 0)
+            return;
 
-void NetworkPlayer::listenForServerResponse() {
-    auto buffer = std::make_shared<std::vector<std::uint8_t>>(Serializer::HEADER_SIZE);
+        NetworkMovePacket packet;
+        packet.matchId = m_matchId.load();
+        packet.requestId = m_nextRequestId++;
+        packet.playerColor = static_cast<std::uint8_t>(m_assignedColor.load());
 
-    boost::asio::async_read(m_socket, boost::asio::buffer(*buffer),
-        [this, buffer](boost::system::error_code ec, size_t) {
-            if (!ec) {
-                NetworkHeader header = Serializer::deserializeHeader(*buffer);
-                
-                // קריאת ה-Payload בהתאם לגודל שהתקבל בכותרת
-                auto payloadBuffer = std::make_shared<std::vector<std::uint8_t>>(header.payloadSize);
-                boost::asio::async_read(m_socket, boost::asio::buffer(*payloadBuffer),
-                    [this, header, payloadBuffer](boost::system::error_code payloadEc, size_t) {
-                        if (!payloadEc) {
-                            if (header.type == NetworkMessageType::MATCH_FOUND) {
-                                // קבלת מזהה המשחק והצבע שהוקצה מהשרת
-                                std::memcpy(&m_matchId, payloadBuffer->data(), sizeof(m_matchId));
-                                std::memcpy(&m_assignedColor, payloadBuffer->data() + sizeof(m_matchId), sizeof(m_assignedColor));
-                                std::cout << "Match found! ID: " << m_matchId << " As Color: " << (int)m_assignedColor << std::endl;
-                            }
-                            else if (header.type == NetworkMessageType::GAME_MOVE) {
-                                // הגיע מהלך מהיריב דרך השרת
-                                NetworkMovePacket packet;
-                                std::memcpy(&packet, payloadBuffer->data(), sizeof(NetworkMovePacket));
-                                
-                                // המרה ל-PlayerAction של המנוע
-                                PlayerAction action;
-                                action.from = { packet.from.x, packet.from.y };
-                                action.to = { packet.to.x, packet.to.y };
+        // מיפוי קואורדינטות: x מייצג עמודה (col), y מייצג שורה (row)
+        packet.from.x = action.from.col();
+        packet.from.y = action.from.row();
+        packet.to.x = action.to.col();
+        packet.to.y = action.to.row();
 
-                                // הפעלת ה-Callback כדי לעדכן את לולאת המשחק המקומית
-                                if (m_pendingActionCallback) {
-                                    m_pendingActionCallback(action);
-                                    m_pendingActionCallback = nullptr;
-                                }
-                            }
-                            
-                            // המשך האזנה להודעות הבאות
-                            listenForServerResponse();
-                        }
-                    });
-            }
-        });
-}
+        std::vector<std::uint8_t> payload(sizeof(NetworkMovePacket));
+        std::memcpy(payload.data(), &packet, sizeof(NetworkMovePacket));
+
+        auto self = shared_from_this();
+        boost::asio::post(m_strand, [self, payload]()
+                          { self->writePacket(NetworkMessageType::GAME_MOVE, payload); });
+    }
+
+    void NetworkPlayer::writePacket(NetworkMessageType type, const std::vector<std::uint8_t> &payload)
+    {
+        std::uint32_t payloadSize = static_cast<std::uint32_t>(payload.size());
+
+        std::vector<std::uint8_t> writeBuffer;
+        writeBuffer.resize(5 + payloadSize);
+
+        writeBuffer[0] = static_cast<std::uint8_t>(type);
+        std::memcpy(&writeBuffer[1], &payloadSize, sizeof(payloadSize));
+
+        if (payloadSize > 0)
+        {
+            std::memcpy(&writeBuffer[5], payload.data(), payloadSize);
+        }
+
+        auto self = shared_from_this();
+        boost::asio::async_write(m_socket, boost::asio::buffer(writeBuffer),
+                                 boost::asio::bind_executor(m_strand,
+                                                            [self, writeBuffer](boost::system::error_code ec, std::size_t)
+                                                            {
+                                                                if (ec)
+                                                                {
+                                                                    std::cerr << "[Client] Write error: " << ec.message() << std::endl;
+                                                                }
+                                                            }));
+    }
+
+    void NetworkPlayer::handleDisconnect()
+    {
+        std::cout << "[Client] Disconnected from server." << std::endl;
+        m_connected = false;
+        m_matchId = 0;
+    }
+
+    // מימוש המתודה התקנית של ממשק IPlayer
+    std::vector<ActionRequest> NetworkPlayer::decideActions(const view::GameSnapshot &snapshot)
+    {
+        (void)snapshot;
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        // החזרת כל המהלכים שהצטברו מהרשת וניקוי התור באותו פריים
+        auto actions = m_incomingActions;
+        m_incomingActions.clear();
+        return actions;
+    }
 
 } // namespace kungfu
 </file>
 
 <file path="players/network/NetworkPlayer.hpp">
+// players/network/NetworkPlayer.hpp
 #pragma once
 
 #include <boost/asio.hpp>
 #include <memory>
 #include <vector>
+#include <mutex>
+#include <string>
+#include <atomic>
 #include "players/IPlayer.hpp"
 #include "../../server/NetworkMessages.hpp"
+#include "../../engine/actions/ActionResult.hpp" // הוספת ייבוא עבור תוצאות פעולה
 
-namespace kungfu {
+namespace kungfu
+{
+    using boost::asio::ip::tcp;
 
-using boost::asio::ip::tcp;
+    class NetworkPlayer : public IPlayer, public std::enable_shared_from_this<NetworkPlayer>
+    {
+    private:
+        boost::asio::io_context &m_ioContext;
+        tcp::socket m_socket;
+        boost::asio::strand<boost::asio::any_io_executor> m_strand;
 
-class NetworkPlayer : public IPlayer, public std::enable_shared_from_this<NetworkPlayer> {
-public:
-    NetworkPlayer(boost::asio::io_context& ioContext, const std::string& host, const std::string& port);
-    
-    // מימוש מתודות הממשק הקיים של IPlayer
-    virtual void decideAction(std::uint64_t requestId, std::function<void(PlayerAction)> callback) override;
-    virtual void onActionResult(const ActionResult& result) override;
+        std::string m_host;
+        std::string m_port;
 
-    // חיבור ראשוני לשרת ושליחת בקשת הצטרפות
-    void connectAndJoin();
+        std::atomic<std::uint64_t> m_matchId{0};
+        std::atomic<PlayerColor> m_assignedColor{PlayerColor::White};
+        std::atomic<bool> m_connected{false};
 
-private:
-    void sendMoveToServer(std::uint64_t requestId, const PlayerAction& action);
-    void listenForServerResponse();
+        // תור מוגן חוטים לאחסון מהלכים שהגיעו מהשרת
+        std::vector<ActionRequest> m_incomingActions;
+        
+        // תור מוגן חוטים לאחסון תוצאות אימות מהלכים מהשרת
+        std::vector<ActionResult> m_incomingResults;
+        
+        std::mutex m_mutex;
 
-    boost::asio::io_context& m_ioContext;
-    tcp::socket m_socket;
-    std::string m_host;
-    std::string m_port;
-    std::uint64_t m_matchId;
-    std::uint8_t m_assignedColor;
-    
-    
-    std::function<void(PlayerAction)> m_pendingActionCallback;
-};
+        std::vector<std::uint8_t> m_headerBuffer;
+        std::vector<std::uint8_t> m_payloadBuffer;
 
+        std::uint64_t m_nextRequestId = 1;
+
+    public:
+        NetworkPlayer(boost::asio::io_context &ioContext, const std::string &host, const std::string &port);
+        ~NetworkPlayer() override;
+
+        void connectAndJoin();
+
+        std::vector<ActionRequest> decideActions(const view::GameSnapshot &snapshot) override;
+
+        // מתודה לשליפת תוצאות האימות וניקוי התור המקומי באותו פריים
+        std::vector<ActionResult> pollResults() {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            auto results = m_incomingResults;
+            m_incomingResults.clear();
+            return results;
+        }
+
+        void sendMoveToServer(const PlayerAction &action);
+
+        bool isConnected() const { return m_connected; }
+        std::uint64_t matchId() const { return m_matchId; }
+        PlayerColor assignedColor() const { return m_assignedColor; }
+
+    private:
+        void doConnect();
+        void sendJoinRequest();
+        void readHeader();
+        void readPayload(NetworkMessageType type, std::uint32_t payloadSize);
+        void processMessage(NetworkMessageType type, const std::vector<std::uint8_t> &payload);
+        void writePacket(NetworkMessageType type, const std::vector<std::uint8_t> &payload);
+        void handleDisconnect();
+    };
 } // namespace kungfu
 </file>
 
@@ -5729,6 +5916,102 @@ public:
 } // namespace kungfu
 </file>
 
+<file path="server/LiveMatch.hpp">
+#pragma once
+#include <boost/asio.hpp>
+#include <memory>
+#include <chrono>
+#include <iostream>
+#include <vector>
+#include <cstring>
+#include "../engine/core/GameEngine.hpp"
+#include "NetworkMessages.hpp"
+
+namespace kungfu {
+
+// הצהרה קודמת של NetworkSession למניעת תלויות מעגליות
+class NetworkSession;
+
+class LiveMatch : public std::enable_shared_from_this<LiveMatch> {
+private:
+    std::uint64_t m_matchId;
+    std::shared_ptr<GameEngine> m_engine;
+    
+    // שימוש ב-weak_ptr מונע מעגלי זיכרון (Session -> Match -> Session)
+    std::weak_ptr<NetworkSession> m_whiteSession;
+    std::weak_ptr<NetworkSession> m_blackSession;
+
+    boost::asio::steady_timer m_tickTimer;
+    std::chrono::steady_clock::time_point m_lastTickTime;
+    bool m_isRunning = false;
+
+public:
+    LiveMatch(boost::asio::io_context& ioContext, 
+              std::uint64_t matchId, 
+              std::shared_ptr<GameEngine> engine)
+        : m_matchId(matchId), 
+          m_engine(std::move(engine)), 
+          m_tickTimer(ioContext) {}
+
+    void setPlayers(std::shared_ptr<NetworkSession> white, std::shared_ptr<NetworkSession> black) {
+        m_whiteSession = white;
+        m_blackSession = black;
+    }
+
+    std::uint64_t matchId() const { return m_matchId; }
+    std::shared_ptr<GameEngine> engine() const { return m_engine; }
+
+    void start() {
+        if (m_isRunning) return;
+        m_isRunning = true;
+        m_lastTickTime = std::chrono::steady_clock::now();
+        scheduleNextTick();
+        std::cout << "[Match " << m_matchId << "] Tick loop started on server." << std::endl;
+    }
+
+    void stop() {
+        m_isRunning = false;
+        boost::system::error_code ec;
+        m_tickTimer.cancel(ec);
+    }
+
+    // פונקציית עיבוד מהלכים שתמומש לאחר הגדרת NetworkSession
+    void handlePlayerMove(std::shared_ptr<NetworkSession> sender, const NetworkMovePacket& packet);
+
+private:
+    void scheduleNextTick() {
+        if (!m_isRunning) return;
+
+        auto self = shared_from_this();
+        m_tickTimer.expires_after(std::chrono::milliseconds(50)); // 20 Ticks בשנייה
+        m_tickTimer.async_wait([self](const boost::system::error_code& ec) {
+            if (!ec && self->m_isRunning) {
+                self->onTick();
+            }
+        });
+    }
+
+    void onTick() {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastTickTime);
+        m_lastTickTime = now;
+
+        // עדכון הפיזיקה וצינון הכלים במנוע
+        m_engine->wait(static_cast<int>(elapsed.count()));
+
+        if (m_engine->isGameOver()) {
+            std::cout << "[Match " << m_matchId << "] Game over on server." << std::endl;
+            stop();
+            return;
+        }
+
+        scheduleNextTick();
+    }
+};
+
+} // namespace kungfu
+</file>
+
 <file path="server/main.cpp">
 #include <boost/asio.hpp>
 #include <iostream>
@@ -5738,24 +6021,16 @@ public:
 
 int main() {
     try {
-        // 1. הגדרת הפורט עליו יאזין השרת
         const std::uint16_t port = 8080;
-
-        // 2. יצירת לולאת האירועים המרכזית של Boost.Asio
         boost::asio::io_context ioContext;
 
-        // 3. אתחול מנהל המשחקים (הלוגיקה הסטטית/מנוע המשחק)
-        kungfu::MatchManager matchManager;
+        // העברת ה-ioContext כדי שה-MatchManager יוכל להגדיר טיימרים לכל משחק חצי
+        kungfu::MatchManager matchManager(ioContext);
 
         std::cout << "Starting KungFu Chess Server on port " << port << "..." << std::endl;
-
-        // 4. אתחול השרת והתחלת האזנה אסינכרונית לחיבורים נכנסים
         kungfu::NetworkServer server(ioContext, port, matchManager);
 
         std::cout << "Server is running. Waiting for players to connect..." << std::endl;
-
-        // 5. הרצת לולאת האירועים - שורה זו חוסמת את ה-Thread הראשי
-        // ומנהלת את כל הקריאות, הכתיבות והחיבורים בצורה אסינכרונית יעילה
         ioContext.run();
 
     } catch (const std::exception& e) {
@@ -5774,87 +6049,44 @@ int main() {
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <queue>
 #include "../engine/core/GameEngine.hpp"
 #include "NetworkMessages.hpp"
 
 namespace kungfu {
 
-struct LiveMatch {
-    std::uint64_t matchId;
-    std::unique_ptr<GameEngine> engine;
-    std::uint64_t playerWhiteSessionId;
-    std::uint64_t playerBlackSessionId;
-};
+// הצהרות קודמות בלבד - מונע תלות מעגלית
+class NetworkSession;
+class LiveMatch;
 
 class MatchManager {
+private:
+    std::unordered_map<std::uint64_t, std::shared_ptr<LiveMatch>> m_matches;
+    std::uint64_t m_nextMatchId = 1;
+    std::mutex m_mutex;
+
+    std::queue<std::shared_ptr<NetworkSession>> m_waitingPlayers;
+    boost::asio::io_context& m_ioContext;
+
 public:
-    MatchManager() : m_nextMatchId(1) {}
+    explicit MatchManager(boost::asio::io_context& ioContext) 
+        : m_ioContext(ioContext) {}
 
-    // יצירת משחק חדש עם הרכיבים הנדרשים ל-GameEngine
-    std::uint64_t createMatch(std::uint64_t playerWhite, std::uint64_t playerBlack,
-                              std::shared_ptr<IBoard> board,
-                              std::shared_ptr<RuleEngine> ruleEngine) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        
-        std::uint64_t id = m_nextMatchId++;
-        auto match = std::make_unique<LiveMatch>();
-        match->matchId = id;
-        
-        // אתחול ה-GameEngine הקיים שלך בשרת
-        match->engine = std::make_unique<GameEngine>(board, ruleEngine); 
-        match->playerWhiteSessionId = playerWhite;
-        match->playerBlackSessionId = playerBlack;
-        
-        m_matches[id] = std::move(match);
-        return id;
-    }
+    // הצהרות בלבד - המימוש המלא מועבר לתחתית NetworkServer.hpp
+    void registerPlayer(std::shared_ptr<NetworkSession> session);
+    void unregisterPlayer(std::shared_ptr<NetworkSession> session);
 
-    /// @brief מעבד מהלך יחיד ומחזיר את הסטטוס שלו (Accepted/Rejected/Pending)
-    ActionResult processMove(std::uint64_t matchId, const ActionRequest& request) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        
-        auto it = m_matches.find(matchId);
-        if (it == m_matches.end()) {
-            // אם המשחק לא נמצא, נחזיר דחייה כברירת מחדל
-            return ActionResult(request.requestId, ActionStatus::Rejected);
-        }
-        
-        // מנוע המשחק מקבל וקטור של בקשות. נכניס את הבקשה היחידה שלנו
-        std::vector<ActionRequest> requests = { request };
-        std::vector<ActionResult> results = it->second->engine->processActionRequests(requests);
-        
-        // מאחר ושלחנו בקשה אחת, נקבל תוצאה אחת בחזרה
-        if (!results.empty()) {
-            return results.front();
-        }
-        
-        return ActionResult(request.requestId, ActionStatus::Rejected);
-    }
-
-    bool getMatchPlayers(std::uint64_t matchId, std::uint64_t& outWhite, std::uint64_t& outBlack) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        auto it = m_matches.find(matchId);
-        if (it == m_matches.end()) return false;
-        
-        outWhite = it->second->playerWhiteSessionId;
-        outBlack = it->second->playerBlackSessionId;
-        return true;
-    }
-
-    // בדיקה האם המשחק הסתיים (כדי שהשרת יוכל לנקות משאבים)
-    bool isMatchOver(std::uint64_t matchId) {
+    std::shared_ptr<LiveMatch> getMatch(std::uint64_t matchId) {
         std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_matches.find(matchId);
         if (it != m_matches.end()) {
-            return it->second->engine->isGameOver();
+            return it->second;
         }
-        return true;
+        return nullptr;
     }
 
 private:
-    std::unordered_map<std::uint64_t, std::unique_ptr<LiveMatch>> m_matches;
-    std::uint64_t m_nextMatchId;
-    std::mutex m_mutex;
+    void startNewMatch(std::shared_ptr<NetworkSession> player1, std::shared_ptr<NetworkSession> player2);
 };
 
 } // namespace kungfu
@@ -5866,7 +6098,6 @@ private:
 #include <cstdint>
 #include <vector>
 
-
 namespace kungfu {
 
 // סוגי ההודעות ברשת
@@ -5874,7 +6105,7 @@ enum class NetworkMessageType : std::uint8_t {
     JOIN_MATCH_REQUEST,  // לקוח מבקש להצטרף למשחק
     MATCH_FOUND,         // השרת מודיע שמצא משחק ומחזיר צבע ומזהה משחק
     GAME_MOVE,           // שליחת מהלך (מלקוח לשרת או משרת ללקוח)
-    MOVE_RESULT          // השרת מחזיר את תוצאת המהלך (חוקי/לא חוקי)
+    MOVE_RESULT,         // השרת מחזיר את תוצאת המהלך (חוקי/לא חוקי) -- נוסף פסיק מתוקן כאן
     HEARTBEAT            // הודעת סיגנל קטנה לשמירה על החיבור
 };
 
@@ -5909,99 +6140,151 @@ struct NetworkHeader {
 #include <memory>
 #include <vector>
 #include <iostream>
+#include <cstring>
+#include "NetworkMessages.hpp"
 #include "Serializer.hpp"
 #include "MatchManager.hpp"
+#include "LiveMatch.hpp"
+#include "engine/io/BoardParser.hpp"
+#include "engine/rules/RuleEngine.hpp"
+#include "engine/common/GameConfig.hpp"
 
 namespace kungfu {
 
 using boost::asio::ip::tcp;
 
 class NetworkSession : public std::enable_shared_from_this<NetworkSession> {
+private:
+    tcp::socket m_socket;
+    boost::asio::strand<boost::asio::any_io_executor> m_strand;
+    MatchManager& m_matchManager;
+    std::uint64_t m_matchId = 0;
+    PlayerColor m_color = PlayerColor::White;
+
+    std::vector<std::uint8_t> m_headerBuffer;
+    std::vector<std::uint8_t> m_payloadBuffer;
+
 public:
     NetworkSession(tcp::socket socket, MatchManager& matchManager)
-        : m_socket(std::move(socket)), m_matchManager(matchManager), m_matchId(0) {}
+        : m_socket(std::move(socket)), 
+          m_strand(boost::asio::make_strand(m_socket.get_executor())),
+          m_matchManager(matchManager) {
+        m_headerBuffer.resize(5); // כותרת בגודל קבוע: בית אחד לסוג, 4 בתים לאורך
+    }
+
+    tcp::socket& socket() { return m_socket; }
+    std::uint64_t matchId() const { return m_matchId; }
+    void setMatchId(std::uint64_t id) { m_matchId = id; }
+    void setColor(PlayerColor col) { m_color = col; }
 
     void start() {
-        readHeader();
-    }
-
-    // שליחת תוצאה חזרה ללקוח באופן אסינכרוני
-    void sendActionResult(const ActionResult& result) {
         auto self = shared_from_this();
-        
-        // 1. סיראליזציה של גוף התשובה
-        auto payload = Serializer::serializeActionResult(result);
-        
-        // 2. בניית כותרת מתאימה
-        NetworkHeader header{ MessageType::ActionResult, static_cast<std::uint32_t>(payload.size()) };
-        auto headerBuffer = Serializer::serializeHeader(header);
-        
-        // 3. איחוד הכותרת והגוף למאגר אחד לשליחה אטומית
-        auto writeBuffer = std::make_shared<std::vector<std::uint8_t>>(std::move(headerBuffer));
-        writeBuffer->insert(writeBuffer->end(), payload.begin(), payload.end());
-
-        boost::asio::async_write(m_socket, boost::asio::buffer(*writeBuffer),
-            [self, writeBuffer](boost::system::error_code ec, size_t /*length*/) {
-                if (ec) {
-                    std::cerr << "Session write error: " << ec.message() << std::endl;
-                }
-            });
+        boost::asio::post(m_strand, [self]() {
+            self->readHeader();
+        });
     }
 
-    void setMatchId(std::uint64_t matchId) { m_matchId = matchId; }
+    // שליחת הודעה בצורה בטוחה מסוג קול קריאה (Thread-safe)
+    void sendPacket(NetworkMessageType type, const std::vector<std::uint8_t>& payload) {
+        auto self = shared_from_this();
+        boost::asio::post(m_strand, [self, type, payload]() {
+            self->writePacket(type, payload);
+        });
+    }
 
 private:
     void readHeader() {
         auto self = shared_from_this();
-        m_readBuffer.resize(Serializer::HEADER_SIZE);
-
-        boost::asio::async_read(m_socket, boost::asio::buffer(m_readBuffer),
-            [self](boost::system::error_code ec, size_t /*length*/) {
+        boost::asio::async_read(m_socket, boost::asio::buffer(m_headerBuffer),
+            boost::asio::bind_executor(m_strand,
+            [self](boost::system::error_code ec, std::size_t) {
                 if (!ec) {
-                    try {
-                        NetworkHeader header = Serializer::deserializeHeader(self->m_readBuffer);
-                        self->readPayload(header);
-                    } catch (const std::exception& e) {
-                        std::cerr << "Header parsing error: " << e.what() << std::endl;
-                    }
+                    NetworkMessageType type = static_cast<NetworkMessageType>(self->m_headerBuffer[0]);
+                    
+                    std::uint32_t payloadSize = 0;
+                    std::memcpy(&payloadSize, &self->m_headerBuffer[1], sizeof(payloadSize));
+
+                    self->readPayload(type, payloadSize);
+                } else {
+                    self->handleDisconnect();
                 }
-            });
+            }));
     }
 
-    void readPayload(NetworkHeader header) {
+    void readPayload(NetworkMessageType type, std::uint32_t payloadSize) {
         auto self = shared_from_this();
-        m_readBuffer.resize(header.payloadSize);
+        
+        if (payloadSize == 0) {
+            processMessage(type, {});
+            readHeader();
+            return;
+        }
 
-        boost::asio::async_read(m_socket, boost::asio::buffer(m_readBuffer),
-            [self, header](boost::system::error_code ec, size_t /*length*/) {
+        m_payloadBuffer.resize(payloadSize);
+        boost::asio::async_read(m_socket, boost::asio::buffer(m_payloadBuffer),
+            boost::asio::bind_executor(m_strand,
+            [self, type](boost::system::error_code ec, std::size_t) {
                 if (!ec) {
-                    try {
-                        if (header.type == MessageType::ActionRequest) {
-                            ActionRequest req = Serializer::deserializeActionRequest(self->m_readBuffer);
-                            
-                            // עיבוד המהלך דרך ה-MatchManager שחיברנו קודם!
-                            ActionResult res = self->m_matchManager.processMove(self->m_matchId, req);
-                            
-                            // שליחת התשובה חזרה ללקוח
-                            self->sendActionResult(res);
-                        }
-                        
-                        // המשך האזנה להודעה הבאה מאותו לקוח
-                        self->readHeader();
-                    } catch (const std::exception& e) {
-                        std::cerr << "Payload processing error: " << e.what() << std::endl;
-                    }
+                    self->processMessage(type, self->m_payloadBuffer);
+                    self->readHeader(); // קריאת ההודעה הבאה בתור
+                } else {
+                    self->handleDisconnect();
                 }
-            });
+            }));
     }
 
-    tcp::socket m_socket;
-    MatchManager& m_matchManager;
-    std::uint64_t m_matchId;
-    std::vector<std::uint8_t> m_readBuffer;
+    void processMessage(NetworkMessageType type, const std::vector<std::uint8_t>& payload) {
+        if (type == NetworkMessageType::JOIN_MATCH_REQUEST) {
+            m_matchManager.registerPlayer(shared_from_this());
+        } 
+        else if (type == NetworkMessageType::GAME_MOVE) {
+            if (m_matchId == 0) return;
+
+            NetworkMovePacket packet;
+            if (payload.size() >= sizeof(NetworkMovePacket)) {
+                std::memcpy(&packet, payload.data(), sizeof(NetworkMovePacket));
+                
+                auto match = m_matchManager.getMatch(m_matchId);
+                if (match) {
+                    match->handlePlayerMove(shared_from_this(), packet);
+                }
+            }
+        }
+    }
+
+    void writePacket(NetworkMessageType type, const std::vector<std::uint8_t>& payload) {
+        std::uint32_t payloadSize = static_cast<std::uint32_t>(payload.size());
+        
+        std::vector<std::uint8_t> writeBuffer;
+        writeBuffer.resize(5 + payloadSize);
+        
+        writeBuffer[0] = static_cast<std::uint8_t>(type);
+        std::memcpy(&writeBuffer[1], &payloadSize, sizeof(payloadSize));
+        
+        if (payloadSize > 0) {
+            std::memcpy(&writeBuffer[5], payload.data(), payloadSize);
+        }
+
+        auto self = shared_from_this();
+        boost::asio::async_write(m_socket, boost::asio::buffer(writeBuffer),
+            boost::asio::bind_executor(m_strand,
+            [self, writeBuffer](boost::system::error_code ec, std::size_t) {
+                if (ec) {
+                    std::cerr << "[Session] Write error: " << ec.message() << std::endl;
+                }
+            }));
+    }
+
+    void handleDisconnect() {
+        m_matchManager.unregisterPlayer(shared_from_this());
+    }
 };
 
 class NetworkServer {
+private:
+    tcp::acceptor m_acceptor;
+    MatchManager& m_matchManager;
+
 public:
     NetworkServer(boost::asio::io_context& ioContext, std::uint16_t port, MatchManager& matchManager)
         : m_acceptor(ioContext, tcp::endpoint(tcp::v4(), port)), m_matchManager(matchManager) {
@@ -6013,16 +6296,142 @@ private:
         m_acceptor.async_accept(
             [this](boost::system::error_code ec, tcp::socket socket) {
                 if (!ec) {
-                    std::cout << "New player connection accepted!" << std::endl;
-                    std::make_shared<NetworkSession>(std::move(socket), m_matchManager)->start();
+                    std::cout << "[Server] Accepted new connection." << std::endl;
+                    auto session = std::make_shared<NetworkSession>(std::move(socket), m_matchManager);
+                    session->start();
                 }
-                startAccept(); // המשך קבלת חיבורים נוספים
+                startAccept();
             });
     }
-
-    tcp::acceptor m_acceptor;
-    MatchManager& m_matchManager;
 };
+
+// =================================────────────────────────────────============
+// מימושי Inline לפתרון תלויות מעגליות (Circular Dependencies)
+// =================================────────────────────────────────============
+
+inline void LiveMatch::handlePlayerMove(std::shared_ptr<NetworkSession> sender, const NetworkMovePacket& packet) {
+    ActionRequest request = Serializer::deserializeToRequest(packet);
+    
+    std::vector<ActionRequest> requests = { request };
+    std::vector<ActionResult> results = m_engine->processActionRequests(requests);
+
+    if (!results.empty()) {
+        ActionResult result = results.front();
+
+        std::vector<std::uint8_t> resultPayload(sizeof(ActionResult));
+        std::memcpy(resultPayload.data(), &result, sizeof(ActionResult));
+        sender->sendPacket(NetworkMessageType::MOVE_RESULT, resultPayload);
+
+        if (result.status == ActionStatus::Accepted) {
+            std::vector<std::uint8_t> movePayload(sizeof(NetworkMovePacket));
+            std::memcpy(movePayload.data(), &packet, sizeof(NetworkMovePacket));
+
+            auto white = m_whiteSession.lock();
+            auto black = m_blackSession.lock();
+
+            if (sender == white && black) {
+                black->sendPacket(NetworkMessageType::GAME_MOVE, movePayload);
+            } else if (sender == black && white) {
+                white->sendPacket(NetworkMessageType::GAME_MOVE, movePayload);
+            }
+        }
+    }
+}
+
+inline void MatchManager::registerPlayer(std::shared_ptr<NetworkSession> session) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    if (!m_waitingPlayers.empty() && m_waitingPlayers.front() == session) {
+        return;
+    }
+
+    m_waitingPlayers.push(session);
+    std::cout << "[Lobby] Player queued. Queue size: " << m_waitingPlayers.size() << std::endl;
+
+    if (m_waitingPlayers.size() >= 2) {
+        auto player1 = m_waitingPlayers.front();
+        m_waitingPlayers.pop();
+        auto player2 = m_waitingPlayers.front();
+        m_waitingPlayers.pop();
+
+        startNewMatch(player1, player2);
+    }
+}
+
+inline void MatchManager::unregisterPlayer(std::shared_ptr<NetworkSession> session) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
+    std::queue<std::shared_ptr<NetworkSession>> tempQueue;
+    while (!m_waitingPlayers.empty()) {
+        auto player = m_waitingPlayers.front();
+        m_waitingPlayers.pop();
+        if (player != session) {
+            tempQueue.push(player);
+        }
+    }
+    m_waitingPlayers = std::move(tempQueue);
+    
+    std::uint64_t matchId = session->matchId();
+    if (matchId != 0) {
+        auto it = m_matches.find(matchId);
+        if (it != m_matches.end()) {
+            it->second->stop();
+            m_matches.erase(it);
+            std::cout << "[Lobby] Match " << matchId << " cleaned up due to disconnect." << std::endl;
+        }
+    }
+}
+
+inline void MatchManager::startNewMatch(std::shared_ptr<NetworkSession> player1, std::shared_ptr<NetworkSession> player2) {
+    std::uint64_t id = m_nextMatchId++;
+
+    std::string startBoard =
+        "bR bN bB bQ bK bB bN bR\n"
+        "bP bP bP bP bP bP bP bP\n"
+        ". . . . . . . .\n"
+        ". . . . . . . .\n"
+        ". . . . . . . .\n"
+        ". . . . . . . .\n"
+        "wP wP wP wP wP wP wP wP\n"
+        "wR wN wB wQ wK wB wN wR\n";
+
+    auto board = BoardParser::parse(startBoard);
+    auto ruleEngine = std::make_shared<RuleEngine>(board);
+    
+    GameConfig config;
+    config.allowSimultaneousMovement = true;
+    config.enablePremoves = true;
+    config.allowJumping = true;
+
+    auto engine = std::make_shared<GameEngine>(board, ruleEngine, config);
+    auto match = std::make_shared<LiveMatch>(m_ioContext, id, engine);
+
+    player1->setMatchId(id);
+    player1->setColor(PlayerColor::White);
+
+    player2->setMatchId(id);
+    player2->setColor(PlayerColor::Black);
+
+    match->setPlayers(player1, player2);
+    m_matches[id] = match;
+
+    std::vector<std::uint8_t> payloadWhite(9);
+    std::uint8_t colorWhite = static_cast<std::uint8_t>(PlayerColor::White);
+    std::memcpy(payloadWhite.data(), &id, 8);
+    std::memcpy(payloadWhite.data() + 8, &colorWhite, 1);
+
+    std::vector<std::uint8_t> payloadBlack(9);
+    std::uint8_t colorBlack = static_cast<std::uint8_t>(PlayerColor::Black);
+    std::memcpy(payloadBlack.data(), &id, 8);
+    std::memcpy(payloadBlack.data() + 8, &colorBlack, 1);
+
+    player1->sendPacket(NetworkMessageType::MATCH_FOUND, payloadWhite);
+    player2->sendPacket(NetworkMessageType::MATCH_FOUND, payloadBlack);
+
+    match->start();
+
+    std::cout << "[MatchManager] Created match " << id << " between two players." << std::endl;
+}
 
 } // namespace kungfu
 </file>
@@ -6031,29 +6440,37 @@ private:
 #pragma once
 
 #include "NetworkMessages.hpp"
-#include "../engine/core/GameEngine.hpp"
+#include "engine/actions/ActionRequest.hpp"
+#include "engine/actions/ActionResult.hpp"
 #include <cstring>
+#include <vector>
 
 namespace kungfu {
 
 class Serializer {
 public:
-    // תרגום חבילת רשת לבקשת מנוע
+    // תרגום חבילת רשת לבקשת מנוע - תיקון בנאי ללא דיפולט של PlayerAction
     static ActionRequest deserializeToRequest(const NetworkMovePacket& packet) {
-        // המרת המידע מהרשת למבנה שהמנוע שלך דורש
-        // כאן אנחנו מניחים ש-PlayerAction מכיל את הקואורדינטות from/to
-        PlayerAction action;
-        action.from = {packet.from.x, packet.from.y};
-        action.to   = {packet.to.x, packet.to.y};
+        // בבנאי של Position, הראשון הוא row (שורה, y) והשני הוא col (עמודה, x)
+        Position from(packet.from.y, packet.from.x);
+        Position to(packet.to.y, packet.to.x);
+        
+        // אתחול תקין של האקשן באמצעות הבנאי היחיד שקיים עבורו
+        PlayerAction action(from, to);
 
-        return ActionRequest(packet.requestId, static_cast<PlayerColor>(packet.playerColor), action);
+        return ActionRequest(
+            packet.requestId, 
+            static_cast<PlayerColor>(packet.playerColor), 
+            action
+        );
     }
 
-    // תרגום תוצאת מנוע לחבילת רשת
+    // תרגום תוצאת מנוע לחבילת רשת - תיקון שגיאת הכתיב ל-ActionStatus::Rejected
     static ActionResult deserializeToResult(const std::vector<std::uint8_t>& buffer) {
-        // כאן נבצע קריאה של המבנה מהסוקט
-        ActionResult result(0, ActionStatus::REJECTED);
-        std::memcpy(&result, buffer.data(), sizeof(ActionResult));
+        ActionResult result(0, ActionStatus::Rejected);
+        if (buffer.size() >= sizeof(ActionResult)) {
+            std::memcpy(&result, buffer.data(), sizeof(ActionResult));
+        }
         return result;
     }
 };
@@ -7239,6 +7656,7 @@ public:
 #include "players/ai/GenericAIPlayer.hpp"
 #include "players/ai/ClassicMinimaxStrategy.hpp"
 #include "players/ai/RealTimeStrategies.hpp"
+#include "players/network/NetworkPlayer.hpp"
 #include <future>
 #include <memory>
 #include <iostream>
@@ -7246,9 +7664,10 @@ public:
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <thread>
+#include <mutex>
 
-class ChessGameScreen : public BaseScreen
-{
+class ChessGameScreen : public BaseScreen {
 public:
     enum class AiDifficulty { Easy, Medium, Hard };
 
@@ -7259,6 +7678,11 @@ private:
     kungfu::GameConfig m_config;
     std::shared_ptr<ISoundPlayer> m_soundPlayer;
     
+    bool m_isNetworkMode = false;
+    std::shared_ptr<kungfu::NetworkPlayer> m_networkPlayer;
+    boost::asio::io_context m_ioContext;
+    std::thread m_networkThread;
+
     bool m_isPaused = false;
     bool m_isAiOpponent = false;
     AiDifficulty m_aiDifficulty = AiDifficulty::Medium;
@@ -7267,26 +7691,16 @@ private:
     bool m_aiThinking = false;
     std::future<std::vector<kungfu::ActionRequest>> m_aiFuture;
 
-    std::vector<std::string> m_whiteHistory;
-    std::vector<std::string> m_blackHistory;
+    std::vector<std::string> m_whiteHistory, m_blackHistory;
+    std::unique_ptr<Button> m_pauseButton, m_sidebarRestartButton, m_sidebarMenuButton, m_rematchButton, m_menuButton;
 
-    std::unique_ptr<Button> m_pauseButton;
-    std::unique_ptr<Button> m_sidebarRestartButton;
-    std::unique_ptr<Button> m_sidebarMenuButton;
-    std::unique_ptr<Button> m_rematchButton;
-    std::unique_ptr<Button> m_menuButton;
-
-    const float m_boardStartX = 0.0f;
-    const float m_boardStartY = 100.0f;
-    const float m_boardRangeX = 800.0f;
-    const float m_boardRangeY = 800.0f;
+    const float m_boardStartX = 0.0f, m_boardStartY = 100.0f, m_boardRangeX = 800.0f, m_boardRangeY = 800.0f;
 
     struct BoardPos {
-        int row = -1;
-        int col = -1;
+        int row = -1, col = -1;
         bool isValid() const { return row >= 0 && row < 8 && col >= 0 && col < 8; }
-        bool operator==(const BoardPos &other) const { return row == other.row && col == other.col; }
-        bool operator!=(const BoardPos &other) const { return !(*this == other); }
+        bool operator==(const BoardPos &o) const { return row == o.row && col == o.col; }
+        bool operator!=(const BoardPos &o) const { return !(*this == o); }
     };
 
     struct PieceAnimation {
@@ -7294,12 +7708,10 @@ private:
         float jumpTimer = 0.0f;
     };
 
-    float m_totalTime = 0.0f;
-    float m_lastClickTime = 0.0f;
-    BoardPos m_lastClickedTile{-1, -1};
+    float m_totalTime = 0.0f, m_lastClickTime = 0.0f;
+    BoardPos m_lastClickedTile{-1, -1}, m_hoveredTile{-1, -1};
     bool m_isHovering = false;
     PieceAnimation m_selectedPieceAnim;
-    BoardPos m_hoveredTile{-1, -1};
     float m_pauseTransitionProgress = 0.0f;
 
     ParticleSystem m_particleSystem;
@@ -7328,17 +7740,14 @@ private:
     int calculatePlayerScore(kungfu::PlayerColor color) const {
         if (!m_gameEngine || !m_gameEngine->getBoard()) return 0;
         int total = 0;
-
         for (const auto &piece : m_gameEngine->getBoard()->pieces()) {
-            if (piece && piece->color() == color && piece->state() != kungfu::PieceState::Captured) {
+            if (piece && piece->color() == color && piece->state() != kungfu::PieceState::Captured) 
                 total += getPieceValue(piece->type());
-            }
         }
         for (const auto &motion : m_gameEngine->getArbiter().activeMotions()) {
             auto piece = motion.piece();
-            if (piece && piece->color() == color && piece->state() == kungfu::PieceState::Airborne) {
+            if (piece && piece->color() == color && piece->state() == kungfu::PieceState::Airborne) 
                 total += getPieceValue(piece->type());
-            }
         }
         return total;
     }
@@ -7346,18 +7755,14 @@ private:
     std::string getMoveNotationString(kungfu::PieceType type, const BoardPos &from, const BoardPos &to) const {
         char pieceChar = kungfu::PieceTokenCodec::toChar(type);
         std::string notation = { pieceChar, ':', ' ', static_cast<char>('a' + to.col), static_cast<char>('1' + to.row) };
-        if (from == to) {
-            notation += " (Jump)";
-        }
+        if (from == to) notation += " (Jump)";
         return notation;
     }
 
     void addHistoryLog(kungfu::PlayerColor color, const std::string& logText) {
         auto& history = (color == kungfu::PlayerColor::White) ? m_whiteHistory : m_blackHistory;
         history.push_back(logText);
-        if (history.size() > 8) {
-            history.erase(history.begin());
-        }
+        if (history.size() > 8) history.erase(history.begin());
     }
 
     std::unique_ptr<kungfu::IAIDecisionStrategy> createAiStrategy() const {
@@ -7365,10 +7770,9 @@ private:
             if (m_aiDifficulty == AiDifficulty::Easy) return std::make_unique<kungfu::RealTimeEasyStrategy>();
             if (m_aiDifficulty == AiDifficulty::Medium) return std::make_unique<kungfu::RealTimeMediumStrategy>();
             return std::make_unique<kungfu::RealTimeHardStrategy>();
-        } else {
-            int depth = (m_aiDifficulty == AiDifficulty::Easy) ? 1 : (m_aiDifficulty == AiDifficulty::Medium) ? 2 : 3;
-            return std::make_unique<kungfu::ClassicMinimaxStrategy>(depth);
         }
+        int depth = (m_aiDifficulty == AiDifficulty::Easy) ? 1 : (m_aiDifficulty == AiDifficulty::Medium) ? 2 : 3;
+        return std::make_unique<kungfu::ClassicMinimaxStrategy>(depth);
     }
 
     void resetGame() {
@@ -7383,79 +7787,48 @@ private:
             "wR wN wB wQ wK wB wN wR\n";
 
         auto board = kungfu::BoardParser::parse(startBoard);
-        auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
-
-        m_gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine, m_config);
+        m_gameEngine = std::make_shared<kungfu::GameEngine>(board, std::make_shared<kungfu::RuleEngine>(board), m_config);
         m_humanPlayer = std::make_shared<kungfu::HumanPlayer>(m_gameEngine);
-
-        if (m_isAiOpponent) {
-            m_aiPlayer = std::make_shared<kungfu::GenericAIPlayer>(kungfu::PlayerColor::Black, createAiStrategy());
-        } else {
-            m_aiPlayer = nullptr;
-        }
-
-        m_humanPlayer->setCellSize(100);
+        m_aiPlayer = m_isAiOpponent ? std::make_shared<kungfu::GenericAIPlayer>(kungfu::PlayerColor::Black, createAiStrategy()) : nullptr;
+        m_humanPlayer->setCellSize(kungfu::InputConfig::kDefaultCellSize);
 
         struct GameEventObserver : public kungfu::IGameObserver {
             std::shared_ptr<ISoundPlayer> player;
             ChessGameScreen *screen;
-
-            GameEventObserver(std::shared_ptr<ISoundPlayer> p, ChessGameScreen *s)
-                : player(std::move(p)), screen(s) {}
-
+            GameEventObserver(std::shared_ptr<ISoundPlayer> p, ChessGameScreen *s) : player(std::move(p)), screen(s) {}
             void onMoveCompleted(const kungfu::ArrivalEvent &event, int) override {
                 if (event.cancelled || !event.piece) return;
                 if (event.capturedKing) player->playSound("game_over");
                 else if (event.isCapture) player->playSound("capture");
-
-                if (event.isCapture && screen) {
-                    screen->spawnCaptureExplosion(event.to, event.piece->color());
-                }
+                if (event.isCapture && screen) screen->spawnCaptureExplosion(event.to, event.piece->color());
             }
         };
 
-        if (m_soundPlayer) {
-            m_gameEngine->addObserver(std::make_shared<GameEventObserver>(m_soundPlayer, this));
-        }
+        if (m_soundPlayer) m_gameEngine->addObserver(std::make_shared<GameEventObserver>(m_soundPlayer, this));
 
-        m_isPaused = false;
-        m_isHovering = false;
-        m_selectedPieceAnim.isJumping = false;
-        m_selectedPieceAnim.jumpTimer = 0.0f;
-        m_pauseTransitionProgress = 0.0f;
-        m_aiThinking = false;
+        m_isPaused = m_isHovering = m_selectedPieceAnim.isJumping = m_aiThinking = false;
+        m_selectedPieceAnim.jumpTimer = m_pauseTransitionProgress = 0.0f;
         m_particleSystem.clear();
-        m_whiteHistory = {"Connected"};
-        m_blackHistory = {"Connected"};
+        m_whiteHistory = m_blackHistory = {"Connected"};
 
-        m_pauseButton = std::make_unique<Button>(
-            Vector2D{500.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Pause",
-            [this]() { togglePause(); }
-        );
+        m_pauseButton = std::make_unique<Button>(Vector2D{500.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Pause", [this]() { togglePause(); });
         m_pauseButton->setColors(m_theme.buttonNormal, m_theme.buttonHover, {255, 255, 255, 255});
     }
 
     void spawnCaptureExplosion(const kungfu::Position &boardPos, kungfu::PlayerColor attackerColor) {
-        float cellWidth = m_boardRangeX / 8.0f;
-        float cellHeight = m_boardRangeY / 8.0f;
+        float cellWidth = m_boardRangeX / 8.0f, cellHeight = m_boardRangeY / 8.0f;
         float px = m_boardStartX + boardPos.col() * cellWidth + cellWidth / 2.0f;
         float py = m_boardStartY + boardPos.row() * cellHeight + cellHeight / 2.0f;
-
         Color targetColor = (attackerColor == kungfu::PlayerColor::White) ? Color{55, 55, 60, 255} : Color{245, 245, 240, 255};
         m_particleSystem.spawnExplosion({px, py}, targetColor);
     }
 
     void togglePause() {
+        if (m_isNetworkMode) return;
         m_isPaused = !m_isPaused;
-        m_pauseButton = std::make_unique<Button>(
-            Vector2D{500.0f, 25.0f}, Vector2D{140.0f, 50.0f}, m_isPaused ? "Resume" : "Pause",
-            [this]() { togglePause(); }
-        );
-        if (m_isPaused) {
-            m_pauseButton->setColors({40, 110, 75, 255}, {55, 140, 95, 255}, {255, 255, 255, 255});
-        } else {
-            m_pauseButton->setColors(m_theme.buttonNormal, m_theme.buttonHover, {255, 255, 255, 255});
-        }
+        m_pauseButton = std::make_unique<Button>(Vector2D{500.0f, 25.0f}, Vector2D{140.0f, 50.0f}, m_isPaused ? "Resume" : "Pause", [this]() { togglePause(); });
+        if (m_isPaused) m_pauseButton->setColors({40, 110, 75, 255}, {55, 140, 95, 255}, {255, 255, 255, 255});
+        else m_pauseButton->setColors(m_theme.buttonNormal, m_theme.buttonHover, {255, 255, 255, 255});
     }
 
     void initializeScreen() {
@@ -7468,26 +7841,14 @@ private:
 
         resetGame();
 
-        m_sidebarRestartButton = std::make_unique<Button>(
-            Vector2D{660.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Restart",
-            [this]() { resetGame(); }
-        );
+        m_sidebarRestartButton = std::make_unique<Button>(Vector2D{660.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Restart", [this]() { resetGame(); });
         m_sidebarRestartButton->setColors({48, 120, 192, 255}, {60, 140, 220, 255}, {255, 255, 255, 255});
 
-        m_sidebarMenuButton = std::make_unique<Button>(
-            Vector2D{820.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Quit Menu",
-            [this]() { m_screenManager.popScreen(); }
-        );
+        m_sidebarMenuButton = std::make_unique<Button>(Vector2D{820.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Quit Menu", [this]() { m_screenManager.popScreen(); });
         m_sidebarMenuButton->setColors({180, 50, 65, 255}, {210, 65, 80, 255}, {255, 255, 255, 255});
 
-        m_rematchButton = std::make_unique<Button>(
-            Vector2D{220.0f, 540.0f}, Vector2D{160.0f, 50.0f}, "Rematch",
-            [this]() { resetGame(); }
-        );
-        m_menuButton = std::make_unique<Button>(
-            Vector2D{420.0f, 540.0f}, Vector2D{160.0f, 50.0f}, "Main Menu",
-            [this]() { m_screenManager.popScreen(); }
-        );
+        m_rematchButton = std::make_unique<Button>(Vector2D{220.0f, 540.0f}, Vector2D{160.0f, 50.0f}, "Rematch", [this]() { resetGame(); });
+        m_menuButton = std::make_unique<Button>(Vector2D{420.0f, 540.0f}, Vector2D{160.0f, 50.0f}, "Main Menu", [this]() { m_screenManager.popScreen(); });
 
         m_rematchButton->setColors({40, 110, 75, 255}, {55, 140, 95, 255}, {255, 255, 255, 255});
         m_menuButton->setColors({50, 50, 60, 255}, {70, 70, 85, 255}, {255, 255, 255, 255});
@@ -7496,14 +7857,12 @@ private:
     void drawOverlays(IRenderer &renderer, const kungfu::view::GameSnapshot &snapshot) {
         if (m_pauseTransitionProgress > 0.0f && !snapshot.isGameOver) {
             renderer.drawRectangle({m_boardStartX, m_boardStartY}, {m_boardRangeX, m_boardRangeY}, {15, 15, 20, static_cast<std::uint8_t>(m_pauseTransitionProgress * 180)}, true);
-
             float panelY = -200.0f + 500.0f * (m_pauseTransitionProgress * m_pauseTransitionProgress * (3.0f - 2.0f * m_pauseTransitionProgress));
             renderer.drawRectangle({350.0f, panelY}, {300.0f, 150.0f}, {25, 25, 35, static_cast<std::uint8_t>(m_pauseTransitionProgress * 240)}, true);
             renderer.drawRectangle({350.0f, panelY}, {300.0f, 150.0f}, {80, 80, 100, static_cast<std::uint8_t>(m_pauseTransitionProgress * 255)}, false);
             renderer.drawText("PAUSED", {445.0f, panelY + 50.0f}, 38, {240, 200, 80, static_cast<std::uint8_t>(m_pauseTransitionProgress * 255)});
             renderer.drawText("Press SPACE or Resume", {390.0f, panelY + 110.0f}, 14, {180, 180, 190, static_cast<std::uint8_t>(m_pauseTransitionProgress * 255)});
         }
-
         if (snapshot.isGameOver) {
             renderer.drawRectangle({m_boardStartX, m_boardStartY}, {m_boardRangeX, m_boardRangeY}, {10, 10, 15, 150}, true);
             renderer.drawRectangle({150.0f, 350.0f}, {500.0f, 300.0f}, {20, 20, 25, 240}, true);
@@ -7516,9 +7875,7 @@ private:
 
     void handleJump(const kungfu::Position& pos) {
         if (m_gameEngine->requestMove(pos, pos).isAccepted) {
-            auto type = getPieceTypeAt(pos);
-            auto color = m_gameEngine->getPieceColorAt(pos).value_or(kungfu::PlayerColor::White);
-            addHistoryLog(color, getMoveNotationString(type, {pos.row(), pos.col()}, {pos.row(), pos.col()}));
+            addHistoryLog(m_gameEngine->getPieceColorAt(pos).value_or(kungfu::PlayerColor::White), getMoveNotationString(getPieceTypeAt(pos), {pos.row(), pos.col()}, {pos.row(), pos.col()}));
         }
         m_humanPlayer->clearSelection();
     }
@@ -7527,55 +7884,74 @@ private:
         BoardPos clickedTile{row, col};
         float timeSinceLastClick = m_totalTime - m_lastClickTime;
 
-        if (m_isAiOpponent && !m_humanPlayer->selectedPosition().has_value()) {
-            if (m_gameEngine->getPieceColorAt({row, col}) == kungfu::PlayerColor::Black) {
-                return;
+        if (m_isNetworkMode && m_networkPlayer) {
+            auto clickedColorOpt = m_gameEngine->getPieceColorAt({row, col});
+            if (!m_humanPlayer->selectedPosition().has_value() && clickedColorOpt.has_value()) {
+                if (clickedColorOpt.value() != m_networkPlayer->assignedColor()) return;
             }
+        } else if (m_isAiOpponent && !m_humanPlayer->selectedPosition().has_value()) {
+            if (m_gameEngine->getPieceColorAt({row, col}) == kungfu::PlayerColor::Black) return;
         }
 
         if (clickedTile == m_lastClickedTile && timeSinceLastClick < 0.48f && timeSinceLastClick > 0.001f) {
             m_lastClickTime = 0.0f;
             m_lastClickedTile = {-1, -1};
-
             if (auto selectedOpt = m_humanPlayer->selectedPosition()) {
-                handleJump(*selectedOpt);
-            } else {
-                m_humanPlayer->handleClick(col * 100 + 50, row * 100 + 50);
+                if (m_isNetworkMode) m_networkPlayer->sendMoveToServer(kungfu::PlayerAction(*selectedOpt, *selectedOpt));
+                else handleJump(*selectedOpt);
             }
-            m_isHovering = false;
-            m_selectedPieceAnim.isJumping = false;
+            m_isHovering = m_selectedPieceAnim.isJumping = false;
             m_selectedPieceAnim.jumpTimer = 0.0f;
         } else {
             m_lastClickTime = m_totalTime;
             m_lastClickedTile = clickedTile;
-
-            auto activeColor = m_gameEngine->currentTurn();
             auto selectedBefore = m_humanPlayer->selectedPosition();
-            kungfu::PieceType movingPieceType = selectedBefore ? getPieceTypeAt(*selectedBefore) : kungfu::PieceType::Pawn;
-            if (selectedBefore) {
-                if (auto p = m_gameEngine->getBoard()->pieceAt(*selectedBefore)) activeColor = p.value()->color();
-            }
 
-            auto result = m_humanPlayer->handleClick(col * 100 + 50, row * 100 + 50);
-            auto selectedAfter = m_humanPlayer->selectedPosition();
+            if (m_isNetworkMode) {
+                if (selectedBefore.has_value()) {
+                    kungfu::Position from = selectedBefore.value();
+                    kungfu::Position to(row, col);
 
-            m_selectedPieceAnim.isJumping = (!selectedBefore && selectedAfter);
-            m_isHovering = false;
-            m_selectedPieceAnim.jumpTimer = 0.0f;
+                    if (from == to) {
+                        m_humanPlayer->clearSelection();
+                    } else {
+                        auto boardNonConst = std::const_pointer_cast<kungfu::IBoard>(m_gameEngine->getBoard());
+                        kungfu::RuleEngine validator(boardNonConst);
+                        if (validator.validateMove(from, to).isValid) {
+                            m_networkPlayer->sendMoveToServer(kungfu::PlayerAction(from, to));
+                        }
+                        m_humanPlayer->clearSelection();
+                    }
+                } else {
+                    const int cellSize = kungfu::InputConfig::kDefaultCellSize;
+                    const int halfCell = cellSize / 2;
+                    m_humanPlayer->handleClick(col * cellSize + halfCell, row * cellSize + halfCell);
+                }
+            } else {
+                auto activeColor = m_gameEngine->currentTurn();
+                kungfu::PieceType movingPieceType = selectedBefore ? getPieceTypeAt(*selectedBefore) : kungfu::PieceType::Pawn;
+                if (selectedBefore) {
+                    if (auto p = m_gameEngine->getBoard()->pieceAt(*selectedBefore)) activeColor = p.value()->color();
+                }
 
-            if (result.actionTaken && result.from && result.to && selectedBefore) {
-                if (result.description.rfind("Move requested:", 0) == 0) {
-                    addHistoryLog(activeColor, getMoveNotationString(movingPieceType, {selectedBefore->row(), selectedBefore->col()}, {row, col}));
+                auto result = m_humanPlayer->handleClick(col * 100 + 50, row * 100 + 50);
+                auto selectedAfter = m_humanPlayer->selectedPosition();
+
+                m_selectedPieceAnim.isJumping = (!selectedBefore && selectedAfter);
+                m_isHovering = false;
+                m_selectedPieceAnim.jumpTimer = 0.0f;
+
+                if (result.actionTaken && result.from && result.to && selectedBefore) {
+                    if (result.description.rfind("Move requested:", 0) == 0) {
+                        addHistoryLog(activeColor, getMoveNotationString(movingPieceType, {selectedBefore->row(), selectedBefore->col()}, {row, col}));
+                    }
                 }
             }
         }
     }
 
     void processAiTurn(float deltaTime) {
-        if (m_isPaused || m_gameEngine->isGameOver() || !m_isAiOpponent || !m_aiPlayer) {
-            return;
-        }
-
+        if (m_isPaused || m_gameEngine->isGameOver() || !m_isAiOpponent || !m_aiPlayer) return;
         if (!m_config.allowSimultaneousMovement && m_gameEngine->currentTurn() == kungfu::PlayerColor::White) {
             m_aiActionPending = false;
             return;
@@ -7583,9 +7959,7 @@ private:
 
         bool shouldAiMove = false;
         if (!m_config.allowSimultaneousMovement) {
-            if (m_gameEngine->currentTurn() == kungfu::PlayerColor::Black &&
-                !m_aiActionPending &&
-                !m_gameEngine->getArbiter().hasActiveMotion()) {
+            if (m_gameEngine->currentTurn() == kungfu::PlayerColor::Black && !m_aiActionPending && !m_gameEngine->getArbiter().hasActiveMotion()) {
                 shouldAiMove = true;
             }
         } else {
@@ -7598,36 +7972,22 @@ private:
 
         if (shouldAiMove && !m_aiThinking) {
             m_aiThinking = true;
-            auto snapshot = kungfu::view::SnapshotBuilder::build(
-                *m_gameEngine->getBoard(),
-                m_gameEngine->getArbiter(),
-                m_gameEngine->getCurrentTimeMs(),
-                m_gameEngine->isGameOver(),
-                std::nullopt,
-                m_boardRangeX / 8);
-
-            m_aiFuture = std::async(std::launch::async, [this, snapshot]() {
-                return m_aiPlayer->decideActions(snapshot);
-            });
+            auto snapshot = kungfu::view::SnapshotBuilder::build(*m_gameEngine->getBoard(), m_gameEngine->getArbiter(), m_gameEngine->getCurrentTimeMs(), m_gameEngine->isGameOver(), std::nullopt, m_boardRangeX / 8);
+            m_aiFuture = std::async(std::launch::async, [this, snapshot]() { return m_aiPlayer->decideActions(snapshot); });
         }
 
         if (m_aiThinking && m_aiFuture.valid()) {
             if (m_aiFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 auto aiRequests = m_aiFuture.get();
-                m_aiThinking = false;
-                m_aiActionPending = false;
+                m_aiThinking = m_aiActionPending = false;
 
                 if (!aiRequests.empty()) {
                     auto aiResults = m_gameEngine->processActionRequests(aiRequests);
                     if (!aiResults.empty() && aiResults.front().status == kungfu::ActionStatus::Accepted) {
                         for (const auto& req : aiRequests) {
-                            auto action = req.action;
-                            kungfu::PieceType pieceType = getPieceTypeAt(action.from);
-                            addHistoryLog(kungfu::PlayerColor::Black, getMoveNotationString(pieceType, {action.from.row(), action.from.col()}, {action.to.row(), action.to.col()}));
+                            addHistoryLog(kungfu::PlayerColor::Black, getMoveNotationString(getPieceTypeAt(req.action.from), {req.action.from.row(), req.action.from.col()}, {req.action.to.row(), req.action.to.col()}));
                         }
-                        if (!m_config.allowSimultaneousMovement) {
-                            m_gameEngine->wait(1000);
-                        }
+                        if (!m_config.allowSimultaneousMovement) m_gameEngine->wait(1000);
                     }
                 }
             }
@@ -7637,63 +7997,51 @@ private:
 protected:
     void drawContent(IRenderer &renderer) override {
         auto board = m_gameEngine->getBoard();
-        auto selectedOpt = m_humanPlayer->selectedPosition();
+        auto snapshot = kungfu::view::SnapshotBuilder::build(*board, m_gameEngine->getArbiter(), m_gameEngine->getCurrentTimeMs(), m_gameEngine->isGameOver(), m_humanPlayer->selectedPosition(), m_boardRangeX / board->cols());
 
-        auto snapshot = kungfu::view::SnapshotBuilder::build(
-            *board,
-            m_gameEngine->getArbiter(),
-            m_gameEngine->getCurrentTimeMs(),
-            m_gameEngine->isGameOver(),
-            selectedOpt,
-            m_boardRangeX / board->cols()
-        );
-
-        m_boardView.draw(renderer, snapshot, m_gameEngine->getPremoveQueue(),
-                         m_boardStartX, m_boardStartY, m_boardRangeX, m_boardRangeY,
-                         m_hoveredTile.row, m_hoveredTile.col,
-                         m_isHovering, m_selectedPieceAnim.isJumping, m_selectedPieceAnim.jumpTimer,
-                         m_isPaused, m_config.allowSimultaneousMovement);
-
+        m_boardView.draw(renderer, snapshot, m_gameEngine->getPremoveQueue(), m_boardStartX, m_boardStartY, m_boardRangeX, m_boardRangeY, m_hoveredTile.row, m_hoveredTile.col, m_isHovering, m_selectedPieceAnim.isJumping, m_selectedPieceAnim.jumpTimer, m_isPaused, m_config.allowSimultaneousMovement);
         m_particleSystem.draw(renderer);
-
-        m_headerView.draw(renderer, "KUNG-FU CHESS", m_theme.background, m_theme.border, m_theme.titleText,
-                          *m_pauseButton, *m_sidebarRestartButton, *m_sidebarMenuButton);
-
+        m_headerView.draw(renderer, "KUNG-FU CHESS", m_theme.background, m_theme.border, m_theme.titleText, *m_pauseButton, *m_sidebarRestartButton, *m_sidebarMenuButton);
         m_sidebarView.draw(renderer, m_whiteHistory, m_blackHistory, m_theme.background, m_theme.border);
-
-        int whiteScore = calculatePlayerScore(kungfu::PlayerColor::White);
-        int blackScore = calculatePlayerScore(kungfu::PlayerColor::Black);
-        m_footerView.draw(renderer, whiteScore, blackScore, m_gameEngine->isGameOver(), m_isPaused,
-                          m_config.allowSimultaneousMovement, m_gameEngine->currentTurn(),
-                          m_theme.background, m_theme.border);
-
+        m_footerView.draw(renderer, calculatePlayerScore(kungfu::PlayerColor::White), calculatePlayerScore(kungfu::PlayerColor::Black), m_gameEngine->isGameOver(), m_isPaused, m_config.allowSimultaneousMovement, m_gameEngine->currentTurn(), m_theme.background, m_theme.border);
         drawOverlays(renderer, snapshot);
     }
 
 public:
-    explicit ChessGameScreen(ScreenManager &manager,
-                             bool isSimultaneousMode,
-                             bool isAiOpponent,
-                             AiDifficulty aiDifficulty,
-                             std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>())
-        : BaseScreen(manager, "Chess Match"), m_isAiOpponent(isAiOpponent), m_aiDifficulty(aiDifficulty), m_soundPlayer(std::move(soundPlayer)) {
+    explicit ChessGameScreen(ScreenManager &manager, bool isSimultaneousMode, bool isAiOpponent, AiDifficulty aiDifficulty, std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>(), bool isNetworkMode = false, std::string host = "127.0.0.1", std::string port = "8080")
+        : BaseScreen(manager, "Chess Match"), m_isAiOpponent(isAiOpponent), m_aiDifficulty(aiDifficulty), m_soundPlayer(std::move(soundPlayer)), m_isNetworkMode(isNetworkMode) {
+        
         m_config.allowSimultaneousMovement = isSimultaneousMode;
         if (!m_config.allowSimultaneousMovement) {
             m_config.cooldownDurationMs = 0;
-            m_config.allowJumping = false;
-            m_config.enablePremoves = false;
+            m_config.allowJumping = m_config.enablePremoves = false;
         }
         initializeScreen();
+
+        if (m_isNetworkMode) {
+            m_isAiOpponent = false;
+            m_aiPlayer = nullptr;
+            m_networkPlayer = std::make_shared<kungfu::NetworkPlayer>(m_ioContext, host, port);
+            m_networkPlayer->connectAndJoin();
+            m_networkThread = std::thread([this]() {
+                boost::asio::io_context::work work(m_ioContext);
+                m_ioContext.run();
+            });
+        }
     }
 
-    explicit ChessGameScreen(ScreenManager &manager,
-                             bool isSimultaneousMode,
-                             bool isAiOpponent = false,
-                             std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>())
-        : ChessGameScreen(manager, isSimultaneousMode, isAiOpponent, AiDifficulty::Medium, soundPlayer) {}
+    explicit ChessGameScreen(ScreenManager &manager, bool isSimultaneousMode, bool isAiOpponent = false, std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>())
+        : ChessGameScreen(manager, isSimultaneousMode, isAiOpponent, AiDifficulty::Medium, soundPlayer, false, "127.0.0.1", "8080") {}
 
-    void onEnter() override { std::cout << "Chess Game Screen Activated!" << std::endl; }
-    void onExit() override { std::cout << "Chess Game Screen Deactivated!" << std::endl; }
+    ~ChessGameScreen() override {
+        if (m_isNetworkMode) {
+            m_ioContext.stop();
+            if (m_networkThread.joinable()) m_networkThread.join();
+        }
+    }
+
+    void onEnter() override {}
+    void onExit() override {}
 
     void update(float deltaTime) override {
         m_pauseButton->update(deltaTime);
@@ -7702,7 +8050,6 @@ public:
 
         m_totalTime += deltaTime;
         m_pauseTransitionProgress = std::clamp(m_pauseTransitionProgress + (m_isPaused ? deltaTime * 5.0f : -deltaTime * 5.0f), 0.0f, 1.0f);
-
         m_particleSystem.update(deltaTime);
 
         if (m_isPaused) {
@@ -7713,11 +8060,8 @@ public:
         m_gameEngine->wait(static_cast<int>(deltaTime * 1000.0f));
 
         if (m_soundPlayer) {
-            if (!m_gameEngine->isGameOver() && m_gameEngine->getArbiter().hasActiveMotion()) {
-                m_soundPlayer->playLoop("walk");
-            } else {
-                m_soundPlayer->stopSound("walk");
-            }
+            if (!m_gameEngine->isGameOver() && m_gameEngine->getArbiter().hasActiveMotion()) m_soundPlayer->playLoop("walk");
+            else m_soundPlayer->stopSound("walk");
         }
 
         if (m_gameEngine->isGameOver()) {
@@ -7725,21 +8069,34 @@ public:
             m_menuButton->update(deltaTime);
         }
 
-        processAiTurn(deltaTime);
+        if (m_isNetworkMode && m_networkPlayer) {
+            auto results = m_networkPlayer->pollResults();
+            for (const auto& res : results) {
+                if (res.status == kungfu::ActionStatus::Rejected) {
+                    addHistoryLog(m_networkPlayer->assignedColor(), "Move rejected by server");
+                }
+            }
+
+            auto snapshot = kungfu::view::SnapshotBuilder::build(*m_gameEngine->getBoard(), m_gameEngine->getArbiter(), m_gameEngine->getCurrentTimeMs(), m_gameEngine->isGameOver(), std::nullopt, m_boardRangeX / 8);
+            auto networkActions = m_networkPlayer->decideActions(snapshot);
+            for (const auto& req : networkActions) {
+                if (m_gameEngine->requestMove(req.action.from, req.action.to).isAccepted) {
+                    addHistoryLog(req.playerColor, getMoveNotationString(getPieceTypeAt(req.action.to), {req.action.from.row(), req.action.from.col()}, {req.action.to.row(), req.action.to.col()}));
+                }
+            }
+        } else {
+            processAiTurn(deltaTime);
+        }
 
         auto selectedOpt = m_humanPlayer->selectedPosition();
-        if (selectedOpt.has_value() && (m_selectedPieceAnim.isJumping || m_isHovering)) {
-            m_selectedPieceAnim.jumpTimer += deltaTime;
-        } else {
-            m_selectedPieceAnim.jumpTimer = 0.0f;
-        }
+        if (selectedOpt.has_value() && (m_selectedPieceAnim.isJumping || m_isHovering)) m_selectedPieceAnim.jumpTimer += deltaTime;
+        else m_selectedPieceAnim.jumpTimer = 0.0f;
     }
 
     void handleInput(const std::vector<InputEvent> &events) override {
         for (const auto &event : events) {
             if (event.type == InputEvent::Type::Mouse) {
                 const auto &mouse = event.mouse;
-
                 m_pauseButton->handleInput(mouse);
                 m_sidebarRestartButton->handleInput(mouse);
                 m_sidebarMenuButton->handleInput(mouse);
@@ -7756,7 +8113,6 @@ public:
 
                         if (col >= 0 && col < 8 && row >= 0 && row < 8) {
                             m_hoveredTile = BoardPos{row, col};
-
                             if (mouse.action == MouseEvent::Action::Press && mouse.button == MouseButton::Left) {
                                 handleBoardClick(row, col);
                             }
@@ -7779,6 +8135,7 @@ public:
 </file>
 
 <file path="ui/screens/StartScreen.hpp">
+// ui/screens/StartScreen.hpp
 #pragma once
 #include "ui/screens/BaseScreen.hpp"
 #include "ui/framework/ISoundPlayer.hpp"
@@ -7789,37 +8146,32 @@ public:
 class StartScreen : public BaseScreen
 {
 public:
-    enum class GameMode
-    {
-        Simultaneous, // קונג-פו שחמט (זמן אמת)
-        Classic       // שחמט רגיל
-    };
-
-    enum class OpponentType
-    {
-        LocalPlayer, // שחקן מקומי (PvP)
-        AI           // מחשב (PvC)
-    };
+    enum class GameMode { Simultaneous, Classic };
+    enum class OpponentType { LocalPlayer, AI, Online }; // הוספת מצב Online
 
 private:
     Vector2D m_mousePos{0.0f, 0.0f};
     GameMode m_selectedMode{GameMode::Simultaneous};
     OpponentType m_selectedOpponent{OpponentType::AI};
-    ChessGameScreen::AiDifficulty m_selectedDifficulty{ChessGameScreen::AiDifficulty::Medium}; // משתנה רמת קושי
+    ChessGameScreen::AiDifficulty m_selectedDifficulty{ChessGameScreen::AiDifficulty::Medium};
     std::shared_ptr<ISoundPlayer> m_soundPlayer;
 
     // הגדרות גיאומטריות של כפתורי הבחירה והפעולה
     const Vector2D m_btnSize{260.0f, 55.0f};
     const Vector2D m_modeBtnSize{125.0f, 45.0f};
-    const Vector2D m_difficultyBtnSize{80.0f, 45.0f};
+    
+    // הגדרת הממדים עבור כפתורי היריבים וכפתורי רמת הקושי
+    const Vector2D m_opponentBtnSize{80.0f, 45.0f};    // כפתורי יריבים
+    const Vector2D m_difficultyBtnSize{80.0f, 45.0f};  // כפתורי רמת קושי (המשתנה החסר)
 
     // מיקומי בחירת מצב משחק
     const Vector2D m_simulModePos{365.0f, 320.0f};
     const Vector2D m_classicModePos{500.0f, 320.0f};
 
-    // מיקומי בחירת יריב
+    // מיקומי בחירת יריב (שלושה כפתורים אופקיים)
     const Vector2D m_pvpOpponentPos{365.0f, 420.0f};
-    const Vector2D m_aiOpponentPos{500.0f, 420.0f};
+    const Vector2D m_aiOpponentPos{455.0f, 420.0f};
+    const Vector2D m_onlineOpponentPos{545.0f, 420.0f};
 
     // מיקומי בחירת רמת קושי
     const Vector2D m_easyDifficultyPos{365.0f, 520.0f};
@@ -7829,7 +8181,7 @@ private:
     // מיקומי כפתורי שליטה ראשיים
     const Vector2D m_playBtnPos{365.0f, 620.0f};
     const Vector2D m_exitBtnPos{365.0f, 690.0f};
-
+    
     void drawWelcomeMessage(IRenderer &renderer)
     {
         renderer.drawText("KUNG-FU CHESS", {280.0f, 220.0f}, 42, m_theme.titleText);
@@ -7843,14 +8195,12 @@ private:
         bool simulHovered = isPointInRect(m_mousePos, m_simulModePos, m_modeBtnSize);
         bool classicHovered = isPointInRect(m_mousePos, m_classicModePos, m_modeBtnSize);
 
-        // כפתור מצב סימולטני
         bool isSimulActive = (m_selectedMode == GameMode::Simultaneous);
         Color simulColor = isSimulActive ? m_theme.buttonHover : (simulHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
         renderer.drawRectangle(m_simulModePos, m_modeBtnSize, simulColor, true);
         renderer.drawRectangle(m_simulModePos, m_modeBtnSize, m_theme.border, false);
         renderer.drawText("Real-Time", {m_simulModePos.x + 15.0f, m_simulModePos.y + 28.0f}, 14, m_theme.bodyText);
 
-        // כפתור מצב קלאסי
         bool isClassicActive = (m_selectedMode == GameMode::Classic);
         Color classicColor = isClassicActive ? m_theme.buttonHover : (classicHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
         renderer.drawRectangle(m_classicModePos, m_modeBtnSize, classicColor, true);
@@ -7862,22 +8212,30 @@ private:
     {
         renderer.drawText("Select Opponent:", {365.0f, 395.0f}, 16, m_theme.bodyText);
 
-        bool pvpHovered = isPointInRect(m_mousePos, m_pvpOpponentPos, m_modeBtnSize);
-        bool aiHovered = isPointInRect(m_mousePos, m_aiOpponentPos, m_modeBtnSize);
+        bool pvpHovered = isPointInRect(m_mousePos, m_pvpOpponentPos, m_opponentBtnSize);
+        bool aiHovered = isPointInRect(m_mousePos, m_aiOpponentPos, m_opponentBtnSize);
+        bool onlineHovered = isPointInRect(m_mousePos, m_onlineOpponentPos, m_opponentBtnSize);
 
-        // כפתור מצב שחקן מקומי
+        // כפתור מקומי
         bool isPvpActive = (m_selectedOpponent == OpponentType::LocalPlayer);
         Color pvpColor = isPvpActive ? m_theme.buttonHover : (pvpHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
-        renderer.drawRectangle(m_pvpOpponentPos, m_modeBtnSize, pvpColor, true);
-        renderer.drawRectangle(m_pvpOpponentPos, m_modeBtnSize, m_theme.border, false);
-        renderer.drawText("Local PvP", {m_pvpOpponentPos.x + 20.0f, m_pvpOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
+        renderer.drawRectangle(m_pvpOpponentPos, m_opponentBtnSize, pvpColor, true);
+        renderer.drawRectangle(m_pvpOpponentPos, m_opponentBtnSize, m_theme.border, false);
+        renderer.drawText("Local", {m_pvpOpponentPos.x + 18.0f, m_pvpOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
 
-        // כפתור מצב שחקן מול ה-AI
+        // כפתור מול מחשב
         bool isAiActive = (m_selectedOpponent == OpponentType::AI);
         Color aiColor = isAiActive ? m_theme.buttonHover : (aiHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
-        renderer.drawRectangle(m_aiOpponentPos, m_modeBtnSize, aiColor, true);
-        renderer.drawRectangle(m_aiOpponentPos, m_modeBtnSize, m_theme.border, false);
-        renderer.drawText("vs Computer", {m_aiOpponentPos.x + 13.0f, m_aiOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
+        renderer.drawRectangle(m_aiOpponentPos, m_opponentBtnSize, aiColor, true);
+        renderer.drawRectangle(m_aiOpponentPos, m_opponentBtnSize, m_theme.border, false);
+        renderer.drawText("vs AI", {m_aiOpponentPos.x + 18.0f, m_aiOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
+
+        // כפתור משחק רשת
+        bool isOnlineActive = (m_selectedOpponent == OpponentType::Online);
+        Color onlineColor = isOnlineActive ? m_theme.buttonHover : (onlineHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
+        renderer.drawRectangle(m_onlineOpponentPos, m_opponentBtnSize, onlineColor, true);
+        renderer.drawRectangle(m_onlineOpponentPos, m_opponentBtnSize, m_theme.border, false);
+        renderer.drawText("Online", {m_onlineOpponentPos.x + 15.0f, m_onlineOpponentPos.y + 28.0f}, 14, m_theme.bodyText);
     }
 
     void drawDifficultySelector(IRenderer &renderer)
@@ -7891,21 +8249,18 @@ private:
         bool mediumHovered = isPointInRect(m_mousePos, m_mediumDifficultyPos, m_difficultyBtnSize);
         bool hardHovered = isPointInRect(m_mousePos, m_hardDifficultyPos, m_difficultyBtnSize);
 
-        // Easy
         bool isEasyActive = (m_selectedDifficulty == ChessGameScreen::AiDifficulty::Easy);
         Color easyColor = isEasyActive ? m_theme.buttonHover : (easyHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
         renderer.drawRectangle(m_easyDifficultyPos, m_difficultyBtnSize, easyColor, true);
         renderer.drawRectangle(m_easyDifficultyPos, m_difficultyBtnSize, m_theme.border, false);
         renderer.drawText("Easy", {m_easyDifficultyPos.x + 18.0f, m_easyDifficultyPos.y + 28.0f}, 14, m_theme.bodyText);
 
-        // Medium
         bool isMediumActive = (m_selectedDifficulty == ChessGameScreen::AiDifficulty::Medium);
         Color mediumColor = isMediumActive ? m_theme.buttonHover : (mediumHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
         renderer.drawRectangle(m_mediumDifficultyPos, m_difficultyBtnSize, mediumColor, true);
         renderer.drawRectangle(m_mediumDifficultyPos, m_difficultyBtnSize, m_theme.border, false);
         renderer.drawText("Med", {m_mediumDifficultyPos.x + 22.0f, m_mediumDifficultyPos.y + 28.0f}, 14, m_theme.bodyText);
 
-        // Hard
         bool isHardActive = (m_selectedDifficulty == ChessGameScreen::AiDifficulty::Hard);
         Color hardColor = isHardActive ? m_theme.buttonHover : (hardHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
         renderer.drawRectangle(m_hardDifficultyPos, m_difficultyBtnSize, hardColor, true);
@@ -7947,10 +8302,7 @@ public:
     void onEnter() override {}
     void onExit() override {}
 
-    void update(float deltaTime) override
-    {
-        (void)deltaTime;
-    }
+    void update(float deltaTime) override { (void)deltaTime; }
 
     void handleInput(const std::vector<InputEvent> &events) override
     {
@@ -7970,13 +8322,17 @@ public:
                     {
                         m_selectedMode = GameMode::Classic;
                     }
-                    else if (isPointInRect(m_mousePos, m_pvpOpponentPos, m_modeBtnSize))
+                    else if (isPointInRect(m_mousePos, m_pvpOpponentPos, m_opponentBtnSize))
                     {
                         m_selectedOpponent = OpponentType::LocalPlayer;
                     }
-                    else if (isPointInRect(m_mousePos, m_aiOpponentPos, m_modeBtnSize))
+                    else if (isPointInRect(m_mousePos, m_aiOpponentPos, m_opponentBtnSize))
                     {
                         m_selectedOpponent = OpponentType::AI;
+                    }
+                    else if (isPointInRect(m_mousePos, m_onlineOpponentPos, m_opponentBtnSize))
+                    {
+                        m_selectedOpponent = OpponentType::Online;
                     }
                     else if (m_selectedOpponent == OpponentType::AI && isPointInRect(m_mousePos, m_easyDifficultyPos, m_difficultyBtnSize))
                     {
@@ -7994,8 +8350,10 @@ public:
                     {
                         bool isSimultaneous = (m_selectedMode == GameMode::Simultaneous);
                         bool isAiOpponent = (m_selectedOpponent == OpponentType::AI);
+                        bool isNetworkMode = (m_selectedOpponent == OpponentType::Online);
+
                         m_screenManager.pushScreen(std::make_unique<ChessGameScreen>(
-                            m_screenManager, isSimultaneous, isAiOpponent, m_selectedDifficulty, m_soundPlayer));
+                            m_screenManager, isSimultaneous, isAiOpponent, m_selectedDifficulty, m_soundPlayer, isNetworkMode));
                     }
                     else if (isPointInRect(m_mousePos, m_exitBtnPos, m_btnSize))
                     {

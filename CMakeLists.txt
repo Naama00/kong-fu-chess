@@ -30,7 +30,6 @@ FetchContent_MakeAvailable(Catch2)
 file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS
     src/engine/*.cpp
     src/players/*.cpp
-    # engine/actions/ and players/IPlayer.hpp are headers-only — no .cpp needed
 )
 
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
@@ -58,11 +57,11 @@ endif()
 
 # עדכון נתיבי החיפוש של המנוע
 target_include_directories(kungfu_engine PUBLIC src ${Boost_INCLUDE_DIR})
+
 # ------------------------------------------------------------------------------
 # Tests
 # ------------------------------------------------------------------------------
 
-# Force Reload of tests
 add_executable(kungfu_tests
     ${TEST_SOURCES}
 )
@@ -74,6 +73,24 @@ target_link_libraries(kungfu_tests PRIVATE
 
 enable_testing()
 add_test(NAME unit_tests COMMAND kungfu_tests)
+
+# ------------------------------------------------------------------------------
+# Server executable (ההגדרה החדשה לשרת המשחק)
+# ------------------------------------------------------------------------------
+
+add_executable(kungfu_server
+    src/server/main.cpp
+)
+
+# הוספת תיקיית השרת המקומית לנתיבי החיפוש של השרת
+target_include_directories(kungfu_server PRIVATE
+    src/server
+)
+
+# קישור השרת למנוע המשחק (יורש אוטומטית את Boost ואת התיקייה src מתוך kungfu_engine)
+target_link_libraries(kungfu_server PRIVATE
+    kungfu_engine
+)
 
 # ------------------------------------------------------------------------------
 # OpenCV executable
