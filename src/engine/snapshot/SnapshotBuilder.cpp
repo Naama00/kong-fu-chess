@@ -99,7 +99,7 @@ namespace kungfu
             std::unordered_set<std::uint64_t> drawnPieceIds;
             drawnPieceIds.reserve(boardPieces.size());
 
-            // 1. ציור כלים שנמצאים פיזית על הלוח (כולל כלים מחליקים רגילים)
+            // 1. Drawing tools that are physically on the board (including regular sliding tools)
             for (const auto &piece : boardPieces)
             {
                 if (!piece || piece->state() == PieceState::Captured)
@@ -134,7 +134,7 @@ namespace kungfu
                 drawnPieceIds.insert(piece->id());
             }
 
-            // 2. זיהוי וציור כלים שנמצאים במצב מעוף (Airborne) והוסרו זמנית מהלוח
+            // 2. Identifying and drawing pieces that are in the air (Airborne) and temporarily removed from the board
             for (const auto &motion : arbiter.activeMotions())
             {
                 auto piece = motion.piece();
@@ -143,7 +143,7 @@ namespace kungfu
                     continue;
                 }
 
-                // אם הכלי כבר צוייר בלולאה הראשונה, נדלג עליו
+                // Skip if this piece has already been drawn in the previous loop
                 if (drawnPieceIds.find(piece->id()) != drawnPieceIds.end())
                 {
                     continue;

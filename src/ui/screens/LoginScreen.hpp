@@ -249,7 +249,7 @@ public:
                 m_statusMessage = result.message;
 
                 if (result.success) {
-                    m_statusColor = {100, 210, 130, 255}; // ירוק להצלחה
+                    m_statusColor = {100, 210, 130, 255}; // green for success
                     
                     kungfu::ClientAuth::username = m_usernameText;
                     kungfu::ClientAuth::password = m_passwordText;
@@ -258,7 +258,7 @@ public:
 
                     m_screenManager.changeScreen(std::make_unique<StartScreen>(m_screenManager, m_soundPlayer));
                 } else {
-                    m_statusColor = {240, 100, 100, 255}; // אדום לכישלון
+                    m_statusColor = {240, 100, 100, 255}; // red for failure
                 }
             }
         }

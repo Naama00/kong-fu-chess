@@ -22,7 +22,7 @@ struct ControllerResult {
 
 class Controller {
 public:
-    // שימוש בקבוע כערך ברירת מחדל
+    // Constructs a Controller with a shared pointer to the game engine and an optional cell size (in pixels).
     Controller(std::shared_ptr<IGameEngine> engine, int cellSize = InputConfig::kDefaultCellSize);
 
     ControllerResult click(int x, int y);

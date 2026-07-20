@@ -2,7 +2,7 @@
 
 namespace kungfu {
 
-// קונפיגורציית ריצה של מנוע המשחק - כל הערכים ניתנים לשינוי
+// Configuration settings for the game engine, including movement speeds, cooldown durations, and gameplay options.
 struct GameConfig {
     int cooldownDurationMs = 2000;
     int msPerCellSpeed = 1000;

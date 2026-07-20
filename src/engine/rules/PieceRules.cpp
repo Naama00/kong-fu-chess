@@ -138,7 +138,7 @@ std::vector<Position> PawnRule::getLegalDestinations(const IBoard& board, const 
 
     int direction = (piece.color() == PlayerColor::White) ? -1 : 1;
 
-    // עוזר: האם יש כלי סטטי (לא Moving/Airborne) בעמדה נתונה
+    // Helper: Is there a static (not Moving/Airborne) vehicle at a given position?
     auto hasStaticPiece = [&](const Position& pos) -> bool {
         auto opt = board.pieceAt(pos);
         if (!opt.has_value() || !opt.value()) return false;
@@ -146,7 +146,7 @@ std::vector<Position> PawnRule::getLegalDestinations(const IBoard& board, const 
         return state != PieceState::Moving && state != PieceState::Airborne;
     };
 
-    // עוזר: האם יש כלי אויב סטטי בעמדה נתונה
+    // Helper: Is there an enemy static piece at a given position?
     auto hasStaticEnemy = [&](const Position& pos) -> bool {
         auto opt = board.pieceAt(pos);
         if (!opt.has_value() || !opt.value()) return false;
@@ -158,7 +158,7 @@ std::vector<Position> PawnRule::getLegalDestinations(const IBoard& board, const 
     int nextRow = currentRow + direction;
     if (nextRow >= 0 && nextRow < maxRows) {
         Position forward(nextRow, currentCol);
-        // מהלך קדימה: רק אם אין כלי סטטי (כלי בתנועה לא חוסם)
+        // Forward move: only if there is no static piece (moving pieces don't block)
         bool isForwardEmpty = !hasStaticPiece(forward);
 
         if (isForwardEmpty) {
@@ -175,7 +175,7 @@ std::vector<Position> PawnRule::getLegalDestinations(const IBoard& board, const 
             }
         }
 
-        // לכידה אלכסונית: רק אם יש אויב סטטי שם (לא כלי בתנועה)
+        // Diagonal capture: only if there is an enemy static piece there (not a moving piece)
         for (int cOffset : {-1, 1}) {
             int nextCol = currentCol + cOffset;
             if (nextCol >= 0 && nextCol < maxCols) {

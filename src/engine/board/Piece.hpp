@@ -20,7 +20,7 @@ public:
 
     // Stable and unique identifier for each Piece object throughout its lifetime — independent of its memory address.
     // Used as a safe key for external data structures (for example cooldowns in RealTimeArbiter),
-    // כדי למנוע התנגשות עם כלים חדשים שנוצרים לאחר שחרור זיכרון של כלי קודם.
+    // To avoid conflict with new tools created after a previous tool's memory is freed.
     std::uint64_t id() const noexcept { return id_; }
 
     void setPosition(const Position& position) { position_ = position; }

@@ -3,7 +3,7 @@
 #include <memory>
 #include "engine/board/IBoard.hpp"
 #include "engine/common/Position.hpp"
-#include "engine/board/Piece.hpp" // הוספת ייבוא של Piece
+#include "engine/board/Piece.hpp"
 #include <string>
 
 namespace kungfu {
@@ -17,10 +17,10 @@ class RuleEngine {
 public:
     explicit RuleEngine(std::shared_ptr<IBoard> board) noexcept;
 
-    // בודק חוקיות מלאה של מהלך עבור הלוח הנוכחי ומחזיר שגיאות מובנות
+    // Checks the full validity of a move for the current board and returns detailed errors if the move is invalid.
     MoveValidation validateMove(const Position& from, const Position& to) const;
 
-    // מתודה חדשה: סימולציה ואימות של מהלך היפותטי (למשל פרה-מוב)
+    // Simulation and validation of a hypothetical move (e.g., for "en passant" captures)
     MoveValidation validateHypotheticalMove(const PiecePtr& piece, const Position& from, const Position& to) const;
 
 private:

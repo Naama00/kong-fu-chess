@@ -23,7 +23,7 @@ public:
         return currentTimeMs < it->second;
     }
 
-    // מתודה חדשה לצורך שליפת זמן סיום הצינון
+    // Returns the expiration time in milliseconds for the given piece ID, or 0 if the piece is not on cooldown.
     int getExpiration(std::uint64_t pieceId) const noexcept {
         auto it = cooldowns_.find(pieceId);
         if (it == cooldowns_.end()) {

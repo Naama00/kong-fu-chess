@@ -57,7 +57,7 @@ void PremoveQueue::processReady(const PieceBusyPredicate& isBusy, const MoveExec
     entries_ = std::move(remainingEntries);
 
     // 3. Execute moves from a stable local array. 
-    // גם אם execute יגרור רישום של pre-move חדש, הוא יתווסף בצורה בטוחה ל-entries_ החדש
+    // Even if execute causes a new pre-move to be registered, it will be safely added to the new entries_
     for (const auto& entry : readyToExecute) {
         if (entry.first && entry.first->state() != PieceState::Captured) {
             execute(entry.first->position(), entry.second);

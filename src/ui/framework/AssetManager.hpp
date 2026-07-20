@@ -57,9 +57,9 @@ public:
     }
 
     /**
-     * שליפת משאב מהמערכת וביצוע המרה לטיפוס המבוקש.
-     * @tparam T סוג המשאב הקונקרטי אליו אנו רוצים להמיר.
-     * @param assetId המזהה הטקסטואלי של המשאב.
+     * Retrieving a resource from the system and converting it to the desired type.
+     * @tparam T The concrete resource type (must inherit from IAsset).
+     * @param assetId The unique textual identifier used to access the resource.
      */
     template <typename T>
     T& getAsset(std::string_view assetId) const {

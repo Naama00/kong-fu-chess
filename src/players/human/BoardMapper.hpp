@@ -8,7 +8,7 @@ namespace kungfu {
 
 class BoardMapper {
 public:
-    // שימוש בקבוע כערך ברירת מחדל
+    // Constructs a BoardMapper with the specified cell size (in pixels).
     explicit BoardMapper(int cellSize = InputConfig::kDefaultCellSize);
 
     std::optional<Position> pixelToCell(int x, int y, int rows, int cols) const noexcept;

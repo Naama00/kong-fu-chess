@@ -38,7 +38,7 @@ public:
 
 class PieceRuleFactory {
 public:
-    // מחזיר הפנייה לחוק המתאים לסוג הכלי, תומך ברישום דינמי של חוקים (עמידה ב-OCP)
+    // Returns a reference to the rule appropriate to the tool type, supports dynamic rule registration (OCP compliant)
     static const IPieceRule& getRule(PieceType type) noexcept;
     static void registerRule(PieceType type, std::unique_ptr<IPieceRule> rule) noexcept;
 };

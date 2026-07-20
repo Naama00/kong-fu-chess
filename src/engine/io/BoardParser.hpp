@@ -9,8 +9,9 @@ namespace kungfu {
 
 class BoardParser {
 public:
-    // מפענח מחרוזת טקסט ומייצר אובייקט Board מוגדר דינמית.
-    // במקרה של קלט לא תקין, הפונקציה תחזיר nullptr (או תזרוק std::invalid_argument).
+    // Parses a textual representation of a chess board into a Board object.
+    // The input format is a multi-line string where each line represents a row of the board
+    // In case of invalid input, the function will return nullptr (or throw std::invalid_argument).
     static std::shared_ptr<Board> parse(const std::string& text);
 
 private:

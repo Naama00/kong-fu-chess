@@ -48,9 +48,9 @@ public:
     }
 
     /**
-     * פרסום (Publish) של אירוע לכל המנויים הרלוונטיים.
-     * @tparam EventType מבנה הנתונים (struct) של האירוע המפורסם.
-     * @param event פרטי האירוע שנשלחים למנויים.
+     * publish an event to all subscribers of that event type.
+     * @tparam EventType The event data structure (struct).
+     * @param event The event data to be published.
      */
     template <typename EventType>
     void publish(const EventType& event) {

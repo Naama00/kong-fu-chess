@@ -56,7 +56,7 @@ bool Board::removePiece(const Position& position) {
 bool Board::removePiece(const PiecePtr& piece) {
     if (!piece) {
         return false;
-    }    // חיפוש הכלי הספציפי במערך לפי המצביע שלו (Identity)
+    }    // search for the piece in the vector and remove it if found
     auto it = std::find(pieces_.begin(), pieces_.end(), piece);
     if (it == pieces_.end()) {
         return false;

@@ -25,10 +25,11 @@ public:
         /**
      * Draw a circular sector for effects such as timers, circular cooldowns, etc.
      * @param startAngle Start angle in degrees (for example, 90- represents the top).
-     * @param endAngle זווית סיום במעלות.
+     * @param endAngle End angle in degrees (for example, 0- represents the right).
+     * @param fill Whether to fill the sector or just draw the outline.
      */
     virtual void drawSector(Vector2D center, float radius, float startAngle, float endAngle, Color color, bool fill = true) = 0;
-    // ציור תמונה/טקסטורה מבוססת מזהה טקסטואלי
+    // Draw a sprite (image) from the asset manager with optional rotation and source rectangle.
     virtual void drawSprite(std::string_view assetId,
                             Vector2D position,
                             Vector2D size,

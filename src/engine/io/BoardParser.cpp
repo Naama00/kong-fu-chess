@@ -12,7 +12,7 @@ std::vector<std::string> BoardParser::splitLines(const std::string& text) {
     std::string line;
     std::istringstream stream(text);
     while (std::getline(stream, line)) {
-        // הסרת רווחים מיותרים מקצוות השורה
+        // Trim leading and trailing whitespace from the line
         line.erase(line.begin(), std::find_if(line.begin(), line.end(), [](unsigned char ch) {
             return !std::isspace(ch);
         }));
@@ -80,7 +80,7 @@ std::shared_ptr<Board> BoardParser::parse(const std::string& text) {
         if (cols == -1) {
             cols = static_cast<int>(tokens.size());
         } else if (static_cast<int>(tokens.size()) != cols) {
-            // הלוח אינו מלבני תקין
+            // Inconsistent number of columns across rows
             return nullptr;
         }
         grid.push_back(tokens);
@@ -92,7 +92,7 @@ std::shared_ptr<Board> BoardParser::parse(const std::string& text) {
         for (int c = 0; c < cols; ++c) {
             const std::string& token = grid[r][c];
             if (!isValidToken(token)) {
-                return nullptr; // טוקן שגוי בלוח
+                return nullptr; // Invalid token on the board
             }
             auto piece = createPiece(token, Position(r, c));
             if (piece) {

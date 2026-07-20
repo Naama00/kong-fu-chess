@@ -11,8 +11,8 @@ public:
      * @param ratingA the current rating of player A.
      * @param ratingB the current rating of player B.
      * @param scoreA the game result for player A (1.0 = win, 0.5 = draw, 0.0 = loss).
-     * @param kFactor מקדם השינוי המרבי (בד"כ 32).
-     * @return הדירוג החדש המעוגל.
+     * @param kFactor the K-factor used in the Elo calculation (default is 32).
+     * @return the new rounded rating.
      */
     static int calculateNewRating(int ratingA, int ratingB, double scoreA, int kFactor = 32) {
         // compute player A's expected win probabilities

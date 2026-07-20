@@ -1,4 +1,4 @@
-// ממשק הבסיס המגדיר את החוזה עבור כל מסך או תפריט במערכת
+// interface for a screen in the application, defining the lifecycle and rendering methods.
 #pragma once
 #include <vector>
 
@@ -14,18 +14,18 @@ public:
     explicit IScreen(ScreenManager& manager) : m_screenManager(manager) {}
     virtual ~IScreen() = default;
 
-    // נקרא בעת כניסה למסך או הפיכתו לפעיל בראש המחסנית
+    // Called when the screen is entered or activated at the top of the stack
     virtual void onEnter() = 0;
-    
-    // נקרא בעת עזיבת המסך או הסרתו מהמחסנית
+
+    // Called when the screen is exited or removed from the stack
     virtual void onExit() = 0;
 
-    // עדכון הלוגיקה הפנימית של המסך (deltaTime בשניות)
+    // Update the internal logic of the screen (deltaTime in seconds)
     virtual void update(float deltaTime) = 0;
 
-    // רינדור רכיבי המסך אל ה-Renderer
+    // Render the screen's components to the renderer
     virtual void draw(IRenderer& renderer) = 0;
 
-    // עיבוד אירועי הקלט שהתקבלו בפריים הנוכחי
+    // Process input events received in the current frame
     virtual void handleInput(const std::vector<InputEvent>& events) = 0;
 };

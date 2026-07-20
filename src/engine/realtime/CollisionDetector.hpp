@@ -12,7 +12,9 @@ struct MidRouteCollision {
     Motion loser;
 };
 
-// רכיב גיאומטרי טהור: אחראי אך ורק על איתור פיזי של חפיפות ונקודות מפגש
+// The CollisionDetector class is responsible for detecting mid-route collisions and arrivals of pieces in motion.
+// It provides static methods to analyze the current state of active motions and determine if any collisions or
+// arrivals have occurred based on the game configuration and current time.
 class CollisionDetector {
 public:
     static std::vector<MidRouteCollision> detectMidRouteCollisions(
@@ -26,7 +28,7 @@ public:
     ) noexcept;
 
 private:
-    // מתודת עזר פנימית לביצוע בדיקה מעמיקה (Narrow Phase) של התנגשות בין שני מסלולים
+    // Internal helper method for performing detailed (Narrow Phase) collision checking between two trajectories
     static std::optional<MidRouteCollision> checkDetailedCollision(
         const Motion& m1, 
         const Motion& m2

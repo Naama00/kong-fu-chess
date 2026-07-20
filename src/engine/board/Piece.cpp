@@ -4,7 +4,7 @@
 
 namespace kungfu {
 
-// הגדרת המשתנה הסטטי של המחלקה והקצאת זיכרון עבורו (מתחיל מ-1)
+// Define the class's static variable and allocate memory for it (starting at 1)
 std::uint64_t Piece::nextId_ = 1;
 
 Piece::Piece(PieceType type, PlayerColor color, Position position)

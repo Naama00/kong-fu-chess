@@ -5,8 +5,8 @@
 
 namespace kungfu {
 
-// מקור אמת יחיד למיפוי בין תו הטוקן הטקסטואלי לבין PieceType.
-// משמש הן ב-BoardParser (פענוח) והן ב-BoardPrinter (הדפסה) כדי למנוע כפילות.
+// Single source of truth for mapping between text token character and PieceType.
+// Used in both BoardParser (decoding) and BoardPrinter (printing) to avoid duplication.
 class PieceTokenCodec {
 public:
     static std::optional<PieceType> fromChar(char c) noexcept {

@@ -27,7 +27,6 @@ public:
     std::optional<Motion> getMotionForPiece(const ConstPiecePtr& piece) const noexcept;
     std::optional<PiecePtr> getPieceInTransitAt(const Position& pos) const noexcept;
     size_t cooldownEntryCount() const noexcept { return cooldownTracker_.entryCount(); }
-    // מתודות הניהול הפיזיקלי של תנועות הכלים
     bool isPieceBusy(const PiecePtr& piece, int currentTimeMs) const noexcept;
     MoveResult executeMove(PiecePtr piece, const Position& from, const Position& to, int currentTimeMs) noexcept;
     float getCooldownProgress(const PiecePtr& piece, int currentTimeMs) const noexcept;

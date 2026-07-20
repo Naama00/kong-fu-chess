@@ -87,9 +87,7 @@ public:
     SidebarView(SidebarView&&) noexcept = default;
     SidebarView& operator=(SidebarView&&) noexcept = default;
 
-    /**
-     * ציור פאנל המהלכים הצידי בהתבסס על ההיסטוריה הלוגית שהתקבלה מהמסך.
-     */
+    // Draw the entire sidebar, including both move-history panels, using the provided renderer.
     void draw(IRenderer& renderer, 
               const std::vector<std::string>& whiteHistory, 
               const std::vector<std::string>& blackHistory,

@@ -17,14 +17,13 @@ bool RealTimeArbiter::hasActiveMotion() const noexcept {
 
 void RealTimeArbiter::startMotion(PiecePtr piece, const Position& from, const Position& to, int currentTimeMs, int durationMs) noexcept {
     activeMotions_.emplace_back(piece, from, to, currentTimeMs, durationMs);
-    // הכלי מתחיל בעמדת המקור; advanceTime יחשב ויעדכן מיקום אינטרפולטיבי בכל tick.
 }
 
-// מחשב את המשבצת הנוכחית של כלי בתנועה לפי הזמן שעבר (interpolation).
-// הכלי זזה משבצת אחת כל msPerCell מילישניות, החל מ-from ועד to.
+// Calculates the current slot of a moving tool based on elapsed time (interpolation).
+// The tool moves one cell every msPerCell milliseconds, starting from 'from' to 'to'.
 static Position interpolatePosition(const Motion& motion, int currentTimeMs, int msPerCell) noexcept {
     if (motion.from() == motion.to()) {
-        return motion.from(); // קפיצה במקום - הכלי נשאר בעמדתו
+        return motion.from(); // No movement, return the original position
     }
 
     int elapsed = currentTimeMs - motion.startTime();
@@ -36,10 +35,10 @@ static Position interpolatePosition(const Motion& motion, int currentTimeMs, int
     int fromR = motion.from().row(), fromC = motion.from().col();
     int toR   = motion.to().row(),   toC   = motion.to().col();
     int dr = toR - fromR, dc = toC - fromC;
-    int steps = std::max(std::abs(dr), std::abs(dc)); // מספר הצעדים הכולל
+    int steps = std::max(std::abs(dr), std::abs(dc)); // Total number of steps
     if (steps == 0) return motion.from();
 
-    // כל כמה מילישניות הכלי עושה צעד אחד
+    // Every few milliseconds the tool takes one step.
     int msPerStep = duration / steps;
     if (msPerStep <= 0) return motion.to();
 
@@ -68,8 +67,8 @@ std::vector<ArrivalEvent> RealTimeArbiter::advanceTime(int ms, int& currentTimeM
     activeMotions_.erase(
         std::remove_if(activeMotions_.begin(), activeMotions_.end(),
             [](const Motion& m) {
-                // מסירים כלים שנלכדו, אבל גם כלים שנעצרו ע"י פתרון mid-route
-                // (state == Idle אחרי resolveMidRouteCollision — הם כבר לא בתנועה).
+                // Removes trapped tools, but also tools stopped by a mid-route solution
+                // (state == Idle after resolveMidRouteCollision — they are no longer in motion).
                 return m.piece()->state() == PieceState::Captured ||
                        m.piece()->state() == PieceState::Idle;
             }),
@@ -104,7 +103,7 @@ std::vector<ArrivalEvent> RealTimeArbiter::advanceTime(int ms, int& currentTimeM
         }
     }
 
-    // עדכון מיקום אינטרפולטיבי — רק לכלים שעדיין בתנועה (לא הגיעו ביחידת הזמן הזו)
+    // Update the positions of all active motions based on the current time, even if they haven't arrived yet.
     for (const auto& motion : activeMotions_) {
         if (motion.from() != motion.to()) {
             auto interpolated = interpolatePosition(motion, currentTimeMs, config_.msPerCellSpeed);
@@ -151,7 +150,7 @@ std::optional<PiecePtr> RealTimeArbiter::getPieceInTransitAt(const Position& pos
     return std::nullopt;
 }
 
-// מימוש בדיקת המצב הפיזיקלי בצורה מרוכזת (DIP) [1]
+// Checks if a piece is currently busy (either moving, airborne, or on cooldown)
 bool RealTimeArbiter::isPieceBusy(const PiecePtr& piece, int currentTimeMs) const noexcept {
     if (!piece) return false;
     return isPieceMoving(piece) || 
@@ -159,12 +158,12 @@ bool RealTimeArbiter::isPieceBusy(const PiecePtr& piece, int currentTimeMs) cons
            isOnCooldown(piece, currentTimeMs);
 }
 
-// מימוש קביעת הזמנים ומצבי התנועה הפיזיקליים של הכלי (SRP) [1]
+// Implements the logic for setting time and physical states of the tool 
 MoveResult RealTimeArbiter::executeMove(PiecePtr piece, const Position& from, const Position& to, int currentTimeMs) noexcept {
     if (from == to) {
         piece->setState(PieceState::Airborne);
-        // כלי קופץ "עוזב" את המשבצת לוגית — מוצא מהלוח עד שינחת.
-        // כלים אחרים יכולים לשבת על המשבצת שלו; כשינחת הוא יאכל אותם.
+        // The tool jumps "leaving" the logical square — removed from the board until it lands.
+        // Other tools can occupy its square; when it lands, it will consume them.
         board_->removePiece(piece);
         startMotion(piece, from, to, currentTimeMs, config_.jumpDurationMs);
         return {true, "jump_started"};
@@ -182,16 +181,6 @@ MoveResult RealTimeArbiter::executeMove(PiecePtr piece, const Position& from, co
 
 float RealTimeArbiter::getCooldownProgress(const PiecePtr& piece, int currentTimeMs) const noexcept {
     if (!piece) return 0.0f;
-
-    // תיקון: guard מפורש נגד cooldownDurationMs == 0 (או שלילי בטעות).
-    // כרגע זה "בטוח" רק בזכות הנחה משתמעת שמי שמגדיר cooldown תמיד עושה
-    // זאת ביחס ל-currentTimeMs הנוכחי, כך ש-remaining כבר <=0 עד שמישהו
-    // שואל. אבל אם ההנחה הזו תופר אי-פעם (או שקונפיגורציה עתידית תגדיר
-    // cooldownDurationMs=0 בזמן ש-expiresAt עדיין עתידי מסיבה כלשהי),
-    // החלוקה למטה הייתה מחזירה +inf - וערך כזה זורם עד ל-
-    // ImgRenderer::sizeToPhysical, שם static_cast<int> על +inf הוא
-    // Undefined Behavior. עדיף לחסום את זה כאן, במקור, במקום לסמוך על כך
-    // שאף אחד בהמשך השרשרת לא ייתקל בערך פגום.
     if (config_.cooldownDurationMs <= 0) {
         return 0.0f;
     }
@@ -200,7 +189,7 @@ float RealTimeArbiter::getCooldownProgress(const PiecePtr& piece, int currentTim
     int remaining = expiresAt - currentTimeMs;
     if (remaining <= 0) return 0.0f;
     
-    // החזרת היחס שנותר מתוך משך הצינון המוגדר בקונפיגורציה
+    // Return a normalized value between 0.0 and 1.0 representing the cooldown progress
     return static_cast<float>(remaining) / config_.cooldownDurationMs;
 }
 

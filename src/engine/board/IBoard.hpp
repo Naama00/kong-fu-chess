@@ -15,7 +15,7 @@ public:
     virtual int rows() const = 0;
     virtual int cols() const = 0;
     
-    // הפרדה בין גישת כתיבה לגישת קריאה בלבד (Const-Correctness)
+    // Separation between write access and read-only access (Const-Correctness)
     virtual std::vector<PiecePtr> pieces() = 0;
     virtual std::vector<std::shared_ptr<const Piece>> pieces() const = 0;
 

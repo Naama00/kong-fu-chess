@@ -25,7 +25,7 @@ TEST_CASE("Asynchronous Network Matchmaking and Move Relay Integration Test", "[
         serverIo.run();
     });
 
-    // 3. הרצת לולאת האירועים של הקליינטים ב-thread נפרד
+    // 3. Run the client event loop in a separate thread
     std::thread clientThread([&]() {
         boost::asio::io_context::work work(clientIo);
         clientIo.run();

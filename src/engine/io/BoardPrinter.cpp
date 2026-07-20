@@ -5,10 +5,10 @@
 
 namespace kungfu {
 
-// פונקציית עזר יחידה ואחידה לקריאת כלי (עבור ConstPiecePtr)
+// Helper function to get the token for a given piece, or "." for an empty square
 std::string BoardPrinter::getPieceToken(const ConstPiecePtr& piece) {
     if (!piece) {
-        return "."; // תו יחיד לייצוג משבצת ריקה
+        return "."; // Single character for representing an empty square
     }
 
     std::string token = (piece->color() == PlayerColor::White) ? "w" : "b";
@@ -16,7 +16,7 @@ std::string BoardPrinter::getPieceToken(const ConstPiecePtr& piece) {
     return token;
 }
 
-// מימוש פונקציית ההדפסה הראשית
+// Implementation of the main print function
 std::string BoardPrinter::print(const Board& board) {
     std::ostringstream out;
     int rows = board.rows();
@@ -27,14 +27,14 @@ std::string BoardPrinter::print(const Board& board) {
             auto pieceOpt = board.pieceAt(Position(r, c));
             
             if (pieceOpt.has_value()) {
-                // קריאה לפונקציה שמקבלת את ה-ConstPiecePtr שהתקבל מהלוח
+                // Call the helper function to get the token for the piece
                 out << getPieceToken(pieceOpt.value());
             } else {
-                out << "."; // תו יחיד לייצוג משבצת ריקה
+                out << "."; // Single character for representing an empty square
             }
             
             if (c + 1 < cols) {
-                out << " "; // רווח בין משבצות באותה שורה
+                out << " "; // Space between squares in the same row
             }
         }
         out << "\n";

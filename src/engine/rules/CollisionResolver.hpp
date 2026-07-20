@@ -22,9 +22,9 @@ public:
     ) noexcept;
 
     void resolveMidRouteCollision(
-        const Motion& winner, // הגיע ראשון (המוקדם)
-        const Motion& loser,  // הגיע שני (המאוחר)
-        int currentTimeMs,    // נוסף לצורך פתרון הצינון של המהלך הידידותי
+        const Motion& winner, // Arrived first (early)
+        const Motion& loser,  // Arrived second (late)
+        int currentTimeMs,    // added for resolving the friendly move cooldown
         std::vector<ArrivalEvent>& events
     ) noexcept;
 

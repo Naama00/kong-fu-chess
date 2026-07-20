@@ -80,9 +80,7 @@ public:
         }
     }
 
-    /**
-     * רינדור כל החלקיקים הפעילים עם החלשת שקיפות הדרגתית.
-     */
+    // Draw all active particles using the provided renderer.
     void draw(IRenderer& renderer) const {
         for (const auto& p : m_particles) {
             Color fadeColor = p.color;
@@ -91,9 +89,7 @@ public:
         }
     }
 
-    /**
-     * ניקוי כל החלקיקים הפעילים מהמסך (למשל בעת ריסטארט)
-     */
+    // Clear all particles from the system.
     void clear() {
         m_particles.clear();
     }
