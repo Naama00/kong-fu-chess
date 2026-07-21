@@ -69,6 +69,7 @@ namespace kungfu
 
         bool m_isSpectator = false;
         std::uint64_t m_spectateMatchId = 0;
+        std::uint64_t m_onlineRoomCode = 0;
 
         std::atomic<bool> m_hasPendingSync{false};
         std::string m_pendingSyncBoard;
@@ -80,7 +81,7 @@ namespace kungfu
 
     public:
         NetworkPlayer(boost::asio::io_context &ioContext, const std::string &host, const std::string &port,
-                      bool isSpectator = false, std::uint64_t spectateMatchId = 0);
+                      bool isSpectator = false, std::uint64_t spectateMatchId = 0, std::uint64_t onlineRoomCode = 0);
         ~NetworkPlayer() override;
 
         void connectAndJoin();

@@ -112,6 +112,22 @@ void LiveMatch::handlePlayerMove(std::shared_ptr<NetworkSession> sender, const N
 }
 
 void LiveMatch::handlePlayerMoveInternal(std::shared_ptr<NetworkSession> sender, const NetworkMovePacket& packet) {
+    // 1. Validate that the sender is indeed the player whose turn it is to move
+    auto white = whiteSession();
+    auto black = blackSession();
+    
+    // 2. Validate the player color
+    bool isWhiteMove = (packet.playerColor == static_cast<std::uint8_t>(PlayerColor::White));
+    bool isBlackMove = (packet.playerColor == static_cast<std::uint8_t>(PlayerColor::Black));
+
+    // 3. Security validation: Ensure the sender is indeed the player with the specified color
+    if ((isWhiteMove && sender != white) || (isBlackMove && sender != black)) {
+        std::cerr << "[Match " << m_matchId << "] Security warning: Unauthorized move attempt from session: " 
+                  << (sender ? sender->username() : "Unknown") << " trying to move color: " 
+                  << (isWhiteMove ? "White" : "Black") << std::endl;
+        return; // Ignore the move and do not process it further
+    }
+
     ActionRequest request = Serializer::deserializeToRequest(packet);
 
     std::vector<ActionRequest> requests = { request };

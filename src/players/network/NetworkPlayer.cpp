@@ -7,7 +7,7 @@
 namespace kungfu
 {
     NetworkPlayer::NetworkPlayer(boost::asio::io_context &ioContext, const std::string &host, const std::string &port,
-                                 bool isSpectator, std::uint64_t spectateMatchId)
+                                 bool isSpectator, std::uint64_t spectateMatchId, std::uint64_t onlineRoomCode)
         : m_ioContext(ioContext),
           m_socket(ioContext),
           m_strand(boost::asio::make_strand(m_socket.get_executor())),
@@ -17,7 +17,8 @@ namespace kungfu
           m_heartbeatTimer(ioContext),
           m_retryTimer(ioContext),
           m_isSpectator(isSpectator),
-          m_spectateMatchId(spectateMatchId)
+          m_spectateMatchId(spectateMatchId),
+          m_onlineRoomCode(onlineRoomCode) 
     {
         m_matchId.store(0);
         m_assignedColor.store(PlayerColor::White);
@@ -74,7 +75,7 @@ namespace kungfu
     }
 
     // Directs connection requests between matchmaking search vs. spectate requests
-    void NetworkPlayer::sendJoinRequest()
+     void NetworkPlayer::sendJoinRequest()
     {
         if (ClientAuth::isAuthenticated) {
             auto payload = Serializer::serializeAuthRequest(ClientAuth::username, ClientAuth::password);
@@ -83,7 +84,10 @@ namespace kungfu
             if (m_isSpectator) {
                 sendSpectateRequest();
             } else {
-                writePacket(NetworkMessageType::JOIN_MATCH_REQUEST, {});
+                // Sending a room code to the server when joining
+                std::vector<std::uint8_t> payload;
+                Serializer::writeU64(payload, m_onlineRoomCode);
+                writePacket(NetworkMessageType::JOIN_MATCH_REQUEST, payload);
             }
         }
     }
@@ -162,7 +166,10 @@ namespace kungfu
                 if (m_isSpectator) {
                     sendSpectateRequest();
                 } else {
-                    writePacket(NetworkMessageType::JOIN_MATCH_REQUEST, {});
+                    // Sending room code in joining request even after successful verification
+                    std::vector<std::uint8_t> joinPayload;
+                    Serializer::writeU64(joinPayload, m_onlineRoomCode);
+                    writePacket(NetworkMessageType::JOIN_MATCH_REQUEST, joinPayload);
                 }
             } else {
                 std::cerr << "[Client] Auth failed. Closing UDP socket." << std::endl;
@@ -286,16 +293,13 @@ namespace kungfu
             m_matchEnded.store(true);
             m_isOpponentDisconnected.store(false);
             break;
-
         case NetworkMessageType::OPPONENT_DISCONNECTED:
             m_opponentDisconnected.store(true);
             m_isOpponentDisconnected.store(false);
             break;
-
         case NetworkMessageType::MATCH_TIMEOUT:
             m_opponentDisconnected.store(true); 
             break;
-
         case NetworkMessageType::HEARTBEAT:
         case NetworkMessageType::JOIN_MATCH_REQUEST:
         case NetworkMessageType::REGISTER_RESPONSE:

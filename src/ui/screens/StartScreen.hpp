@@ -1,4 +1,4 @@
-// Update to ui/screens/StartScreen.hpp
+﻿// ui/screens/StartScreen.hpp
 #pragma once
 #include "ui/screens/BaseScreen.hpp"
 #include "ui/framework/ISoundPlayer.hpp"
@@ -24,11 +24,13 @@ private:
     OpponentType m_selectedOpponent{OpponentType::AI};
     ChessGameScreen::AiDifficulty m_selectedDifficulty{ChessGameScreen::AiDifficulty::Medium};
     
-    // Online/Lobby Spectator Properties
+    // settings for online mode
     OnlineRole m_selectedOnlineRole{OnlineRole::Play};
+    std::string m_onlineRoomCodeText = "0"; // 0 indicates random matchmaking
+    bool m_isRoomCodeActive = false;
+
     std::uint64_t m_selectedSpectateRoomId = 0;
-    
-    // Lobby Asynchronous Client connection (for live room updates on start screen!)
+    std::size_t m_selectedRoomIndex = 0;
     std::shared_ptr<kungfu::NetworkPlayer> m_lobbyNetPlayer;
     boost::asio::io_context m_lobbyIoContext;
     std::thread m_lobbyNetThread;
@@ -166,29 +168,46 @@ private:
         renderer.drawRectangle(m_onlineRoleSpecPos, m_onlineRoleBtnSize, isSpecActive ? Color{255, 255, 255, 180} : m_theme.border, false);
         renderer.drawText("Spectate Room", {m_onlineRoleSpecPos.x + 35.0f, m_onlineRoleSpecPos.y + 28.0f}, 14, m_theme.bodyText);
 
-        // --- NEW REAL-TIME ACTIVE ROOMS LIST (No IDs required!) ---
-        if (isSpecActive) {
-            renderer.drawText("Select Live Match to Spectate:", {310.0f, 580.0f}, 12, m_theme.bodyText);
+        // Unique display tailored to your choice:
+        if (isPlayActive) {
+            // Room Code text field
+            renderer.drawText("Enter Room Code (0 for Random Match):", {310.0f, 570.0f}, 12, m_theme.bodyText);
+            Color borderC = m_isRoomCodeActive ? m_theme.buttonHover : m_theme.border;
+            renderer.drawRectangle({310.0f, 585.0f}, {380.0f, 35.0f}, {18, 19, 23, 255}, true);
+            renderer.drawRectangle({310.0f, 585.0f}, {380.0f, 35.0f}, borderC, false);
+            renderer.drawText(m_onlineRoomCodeText, {325.0f, 608.0f}, 14, {255, 255, 255, 255});
+        }
+        else if (isSpecActive) {
+            renderer.drawText("Select Live Match to Spectate:", {310.0f, 570.0f}, 12, m_theme.bodyText);
 
             if (m_liveRooms.empty()) {
-                renderer.drawRectangle({310.0f, 595.0f}, {380.0f, 32.0f}, {18, 19, 23, 255}, true);
-                renderer.drawRectangle({310.0f, 595.0f}, {380.0f, 32.0f}, m_theme.border, false);
-                renderer.drawText("No active matches online...", {325.0f, 615.0f}, 11, m_theme.textMuted);
+                renderer.drawRectangle({310.0f, 585.0f}, {380.0f, 35.0f}, {18, 19, 23, 255}, true);
+                renderer.drawRectangle({310.0f, 585.0f}, {380.0f, 35.0f}, m_theme.border, false);
+                renderer.drawText("No active matches online...", {325.0f, 608.0f}, 11, m_theme.textMuted);
             } else {
-                // Show up to 1 live room (perfectly centered on screen)
-                const auto& room = m_liveRooms.front();
+                // Ensure the selected index is valid, especially if the list of live rooms has changed
+                if (m_selectedRoomIndex >= m_liveRooms.size()) {
+                    m_selectedRoomIndex = 0;
+                }
+                
+                const auto& room = m_liveRooms[m_selectedRoomIndex];
                 std::string label = "Match #" + std::to_string(room.matchId) + ": " + room.whitePlayer + " vs. " + room.blackPlayer;
                 
                 bool isRoomSelected = (m_selectedSpectateRoomId == room.matchId);
-                Color btnBg = isRoomSelected ? m_theme.buttonHover : (isPointInRect(m_mousePos, Vector2D{310.0f, 595.0f}, Vector2D{380.0f, 32.0f}) ? Color{55, 58, 70, 255} : Color{18, 19, 23, 255});
+                Color btnBg = isRoomSelected ? m_theme.buttonHover : (isPointInRect(m_mousePos, Vector2D{310.0f, 585.0f}, Vector2D{380.0f, 35.0f}) ? Color{55, 58, 70, 255} : Color{18, 19, 23, 255});
                 
-                renderer.drawRectangle({310.0f, 595.0f}, {380.0f, 32.0f}, btnBg, true);
-                renderer.drawRectangle({310.0f, 595.0f}, {380.0f, 32.0f}, isRoomSelected ? Color{255, 255, 255, 180} : m_theme.border, false);
-                renderer.drawText(label, {322.0f, 615.0f}, 10, m_theme.bodyText);
+                renderer.drawRectangle({310.0f, 585.0f}, {380.0f, 35.0f}, btnBg, true);
+                renderer.drawRectangle({310.0f, 585.0f}, {380.0f, 35.0f}, isRoomSelected ? Color{255, 255, 255, 180} : m_theme.border, false);
+                renderer.drawText(label, {322.0f, 608.0f}, 10, m_theme.bodyText);
+                
+                // Add a small visual hint for the user when there are more than one room available
+                if (m_liveRooms.size() > 1) {
+                    renderer.drawText("(Click to cycle through " + std::to_string(m_liveRooms.size()) + " matches)", {310.0f, 625.0f}, 10, m_theme.textMuted);
+                }
             }
         }
-    }
 
+    }
     void drawMenuButtons(IRenderer &renderer)
     {
         bool playHovered = isPointInRect(m_mousePos, m_playBtnPos, m_btnSize);
@@ -228,7 +247,6 @@ public:
     }
 
     ~StartScreen() override {
-        // Safe shutdown of background lobby network context when exiting StartScreen
         if (m_lobbyNetPlayer) {
             m_lobbyIoContext.stop();
             if (m_lobbyNetThread.joinable()) {
@@ -236,17 +254,14 @@ public:
             }
         }
     }
-
-    void onEnter() override {}
-    void onExit() override {}
+    void onEnter() override {};
+    void onExit() override {};
 
     void update(float deltaTime) override { 
         tickBackground(deltaTime); 
 
-        // Periodically poll active rooms from server when in Online-Spectate screen
         if (m_selectedOpponent == OpponentType::Online && m_selectedOnlineRole == OnlineRole::Spectate) {
             if (!m_lobbyNetPlayer) {
-                // Initialize lobby client context in background
                 m_lobbyNetPlayer = std::make_shared<kungfu::NetworkPlayer>(m_lobbyIoContext, "127.0.0.1", "8080", true, 0);
                 m_lobbyNetPlayer->connectAndJoin();
                 m_lobbyNetThread = std::thread([this]() {
@@ -257,7 +272,7 @@ public:
 
             m_lobbyQueryTimer -= deltaTime;
             if (m_lobbyQueryTimer <= 0.0f) {
-                m_lobbyQueryTimer = 1.5f; // poll every 1.5 seconds
+                m_lobbyQueryTimer = 1.5f; 
                 if (m_lobbyNetPlayer && m_lobbyNetPlayer->isConnected()) {
                     m_lobbyNetPlayer->requestActiveRooms();
                 }
@@ -267,7 +282,6 @@ public:
                 m_liveRooms = m_lobbyNetPlayer->getActiveRooms();
             }
         } else {
-            // Disconnect lobby client if we switched to offline mode to free resources
             if (m_lobbyNetPlayer) {
                 m_lobbyIoContext.stop();
                 if (m_lobbyNetThread.joinable()) {
@@ -329,11 +343,26 @@ public:
                     {
                         m_selectedOnlineRole = OnlineRole::Spectate;
                     }
-                    // Handle clicking and selecting a room from the live list
-                    else if (m_selectedOpponent == OpponentType::Online && m_selectedOnlineRole == OnlineRole::Spectate &&
-                             !m_liveRooms.empty() && isPointInRect(m_mousePos, {310.0f, 595.0f}, {380.0f, 32.0f}))
+                    else if (m_selectedOpponent == OpponentType::Online && m_selectedOnlineRole == OnlineRole::Play &&
+                             isPointInRect(m_mousePos, {310.0f, 585.0f}, {380.0f, 35.0f}))
                     {
-                        m_selectedSpectateRoomId = m_liveRooms.front().matchId;
+                        m_isRoomCodeActive = true;
+                    }
+                     else if (m_selectedOpponent == OpponentType::Online && m_selectedOnlineRole == OnlineRole::Spectate &&
+                             !m_liveRooms.empty() && isPointInRect(m_mousePos, {310.0f, 585.0f}, {380.0f, 35.0f}))
+                    {
+                        // 1. Index protection
+                        if (m_selectedRoomIndex >= m_liveRooms.size()) {
+                            m_selectedRoomIndex = 0;
+                        }
+                        // 2. Update room ID for spectating
+                        m_selectedSpectateRoomId = m_liveRooms[m_selectedRoomIndex].matchId;
+                        m_isRoomCodeActive = false;
+                        // 3. Advance the index for the next click (circular mechanism)
+                        m_selectedRoomIndex = (m_selectedRoomIndex + 1) % m_liveRooms.size();
+                    }
+                    else {
+                        m_isRoomCodeActive = false;
                     }
 
                     if (isPointInRect(m_mousePos, m_playBtnPos, m_btnSize))
@@ -344,6 +373,15 @@ public:
                         bool isSpectator = (isNetworkMode && m_selectedOnlineRole == OnlineRole::Spectate);
                         
                         std::uint64_t spectateMatchId = isSpectator ? m_selectedSpectateRoomId : 0;
+                        
+                        std::uint64_t roomCode = 0;
+                        try {
+                            if (!m_onlineRoomCodeText.empty()) {
+                                roomCode = std::stoull(m_onlineRoomCodeText);
+                            }
+                        } catch (...) {
+                            roomCode = 0;
+                        }
 
                         m_screenManager.pushScreen(std::make_unique<ChessGameScreen>(
                             m_screenManager, 
@@ -354,12 +392,37 @@ public:
                             isNetworkMode,
                             "127.0.0.1", "8080",
                             isSpectator,
-                            spectateMatchId
+                            spectateMatchId,
+                            roomCode 
                         ));
                     }
                     else if (isPointInRect(m_mousePos, m_exitBtnPos, m_btnSize))
                     {
                         m_screenManager.popScreen();
+                    }
+                }
+            }
+            else if (event.type == InputEvent::Type::Keyboard)
+            {
+                if (m_isRoomCodeActive) {
+                    if (event.key.key == Key::Backspace) {
+                        if (!m_onlineRoomCodeText.empty()) {
+                            m_onlineRoomCodeText.pop_back();
+                        }
+                    } else {
+                        char c = '\0';
+                        int code = event.key.rawCode;
+                        
+                        // Reading from the local keyboard code
+                        char rawChar = static_cast<char>(code & 0xFF);
+                        if (rawChar >= '0' && rawChar <= '9') {
+                            c = rawChar;
+                        }
+                        
+                        if (c != '\0' && m_onlineRoomCodeText.length() < 10) {
+                            if (m_onlineRoomCodeText == "0") m_onlineRoomCodeText = "";
+                            m_onlineRoomCodeText += c;
+                        }
                     }
                 }
             }

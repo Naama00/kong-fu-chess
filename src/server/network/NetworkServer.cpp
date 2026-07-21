@@ -52,12 +52,12 @@ void NetworkServer::processIncomingDatagram(std::size_t bytesRecvd) {
         if (it != m_sessions.end()) {
             session = it->second;
         } else {
-            NetworkMessageType type = static_cast<NetworkMessageType>(rawType);
-            if (type == NetworkMessageType::LOGIN_REQUEST || type == NetworkMessageType::REGISTER_REQUEST) {
-                session = std::make_shared<NetworkSession>(m_socket, m_remoteEndpoint, m_matchManager);
-                m_sessions[m_remoteEndpoint] = session;
-                session->start();
-            }
+            // Create a new session for this remote endpoint if it doesn't exist yet.
+            // Note: This is a simple approach; in a real-world scenario,
+            // you might want to implement additional checks (e.g., authentication) before creating a session.
+            session = std::make_shared<NetworkSession>(m_socket, m_remoteEndpoint, m_matchManager);
+            m_sessions[m_remoteEndpoint] = session;
+            session->start();
         }
     }
 
@@ -81,7 +81,6 @@ void NetworkServer::pruneStaleSessions() {
     std::lock_guard<std::mutex> lock(m_sessionsMutex);
     
     for (auto it = m_sessions.begin(); it != m_sessions.end(); ) {
-        // Drop sessions inactive for more than 25 seconds
         if (now - it->second->lastActivity() > std::chrono::seconds(25)) {
             std::cout << "[Server] Pruning inactive UDP session: " << it->second->username() << std::endl;
             it->second->handleDisconnect();

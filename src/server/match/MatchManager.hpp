@@ -27,6 +27,7 @@ public:
         std::shared_ptr<NetworkSession> session;
         std::chrono::steady_clock::time_point joinTime;
         int rating;
+        std::uint64_t roomCode = 0; // Optional room code for private matches; 0 means no specific room requested
     };
 
 private:
@@ -36,7 +37,7 @@ private:
 
     std::vector<WaitingPlayer> m_waitingPool;
 
-    DatabaseManager m_dbManager; // Actual secured SQLite database
+    DatabaseManager m_dbManager; 
     boost::asio::io_context& m_ioContext;
     
     boost::asio::steady_timer m_matchmakingTimer;
@@ -46,7 +47,7 @@ public:
 
     DatabaseManager& dbManager() { return m_dbManager; }
 
-    void registerPlayer(std::shared_ptr<NetworkSession> session);
+    void registerPlayer(std::shared_ptr<NetworkSession> session, std::uint64_t roomCode = 0); // עדכון חתימה
     void unregisterPlayer(std::shared_ptr<NetworkSession> session);
 
     std::shared_ptr<LiveMatch> getMatch(std::uint64_t matchId);

@@ -1,4 +1,4 @@
-// src/server/match/MatchManager.cpp
+// server/match/MatchManager.cpp
 #include "MatchManager.hpp"
 #include "../network/NetworkSession.hpp"
 #include "LiveMatch.hpp"
@@ -25,16 +25,17 @@ void MatchManager::scheduleMatchmakingTick() {
     });
 }
 
-void MatchManager::registerPlayer(std::shared_ptr<NetworkSession> session) {
+void MatchManager::registerPlayer(std::shared_ptr<NetworkSession> session, std::uint64_t roomCode) {
     std::lock_guard<std::mutex> lock(m_mutex);
 
     for (const auto& player : m_waitingPool) {
         if (player.session == session) return;
     }
 
-    m_waitingPool.push_back({session, std::chrono::steady_clock::now(), session->rating()});
+    m_waitingPool.push_back({session, std::chrono::steady_clock::now(), session->rating(), roomCode});
     std::cout << "[Lobby] Player " << session->username()
               << " entered matchmaking. (ELO: " << session->rating()
+              << ", Room Code: " << roomCode
               << "). Pool size: " << m_waitingPool.size() << std::endl;
 }
 
@@ -83,9 +84,31 @@ void MatchManager::runMatchmakingCycle() {
         }
 
         for (size_t j = i + 1; j < m_waitingPool.size(); ++j) {
-            int eloDiff = std::abs(m_waitingPool[i].rating - m_waitingPool[j].rating);
+            // Scenario 1: If at least one of the players requested a private room code (roomCode != 0)
+            // They will only be connected if their room code is exactly the same!
+            if (m_waitingPool[i].roomCode != 0 || m_waitingPool[j].roomCode != 0) {
+                if (m_waitingPool[i].roomCode == m_waitingPool[j].roomCode) {
+                    auto player1 = m_waitingPool[i].session;
+                    auto player2 = m_waitingPool[j].session;
 
-            if (eloDiff <= 100) {
+                    m_waitingPool.erase(m_waitingPool.begin() + j);
+                    paired = true;
+
+                    boost::asio::post(m_ioContext, [this, player1, player2]() {
+                        startNewMatch(player1, player2);
+                    });
+                    break;
+                }
+                continue; // Skips regular matchmaking for players with different code
+            }
+
+            // Scenario 2: General network matching (roomCode == 0)
+            // The rating mechanism becomes dynamic. As the player's wait time increases,
+            // the allowed rating gap increases by 10 points per second (fast and fair matching).
+            int eloDiff = std::abs(m_waitingPool[i].rating - m_waitingPool[j].rating);
+            int maxAllowedDiff = 100 + static_cast<int>(waitDuration * 10);
+
+            if (eloDiff <= maxAllowedDiff) {
                 auto player1 = m_waitingPool[i].session;
                 auto player2 = m_waitingPool[j].session;
 
@@ -143,7 +166,6 @@ std::shared_ptr<LiveMatch> MatchManager::startNewMatch(std::shared_ptr<NetworkSe
                                                        std::shared_ptr<NetworkSession> player2) {
     std::uint64_t id = m_nextMatchId++;
 
-    // Standard Match construction delegated cleanly to MatchFactory
     auto match = MatchFactory::createStandardMatch(m_ioContext, id, player1, player2);
 
     match->setOnMatchEnded([this](std::uint64_t finishedMatchId) {

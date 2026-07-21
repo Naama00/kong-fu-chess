@@ -83,8 +83,15 @@ void NetworkSession::processMessage(NetworkMessageType type, const std::vector<s
             std::cerr << "[Server] Blocked unauthenticated UDP player from joining match." << std::endl;
             return;
         }
-        m_matchManager.registerPlayer(shared_from_this());
-    } else if (type == NetworkMessageType::GAME_MOVE) {
+        // Retrieving a designated room code if one exists
+        std::uint64_t roomCode = 0;
+        if (payload.size() >= 8) {
+            std::size_t offset = 0;
+            Serializer::readU64(payload, offset, roomCode);
+        }
+        m_matchManager.registerPlayer(shared_from_this(), roomCode);
+    } 
+    else if (type == NetworkMessageType::GAME_MOVE) {
         if (m_matchId == 0) return;
 
         auto packet = Serializer::deserializeMovePacket(payload);
@@ -98,7 +105,6 @@ void NetworkSession::processMessage(NetworkMessageType type, const std::vector<s
             match->handlePlayerMove(shared_from_this(), *packet);
         }
     } else if (type == NetworkMessageType::SPECTATE_ROOM_REQUEST) {
-        // Allows both authenticated profiles and unauthenticated guest sessions to spectate
         std::size_t offset = 0;
         std::uint64_t targetMatchId = 0;
         if (Serializer::readU64(payload, offset, targetMatchId)) {
@@ -110,7 +116,6 @@ void NetworkSession::processMessage(NetworkMessageType type, const std::vector<s
             }
         }
     } else if (type == NetworkMessageType::ROOM_LIST_REQUEST) {
-        // Queries active matches and serializes room list for the Lobby viewer
         auto matches = m_matchManager.getActiveMatchesList();
         
         std::vector<std::uint8_t> response;
@@ -119,13 +124,11 @@ void NetworkSession::processMessage(NetworkMessageType type, const std::vector<s
         for (const auto& match : matches) {
             Serializer::writeU64(response, match.matchId);
             
-            // Serialize white player username details
             Serializer::writeU32(response, static_cast<std::uint32_t>(match.whitePlayer.size()));
             for (char c : match.whitePlayer) {
                 response.push_back(static_cast<std::uint8_t>(c));
             }
             
-            // Serialize black player username details
             Serializer::writeU32(response, static_cast<std::uint32_t>(match.blackPlayer.size()));
             for (char c : match.blackPlayer) {
                 response.push_back(static_cast<std::uint8_t>(c));

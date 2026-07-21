@@ -477,7 +477,8 @@ public:
                              std::string host = "127.0.0.1", 
                              std::string port = "8080",
                              bool isSpectator = false,
-                             std::uint64_t spectateMatchId = 0)
+                             std::uint64_t spectateMatchId = 0,
+                             std::uint64_t onlineRoomCode = 0)
         : BaseScreen(manager, "Chess Match"), m_isAiOpponent(isAiOpponent), m_aiDifficulty(aiDifficulty), m_soundPlayer(std::move(soundPlayer)), m_isNetworkMode(isNetworkMode) {
         
         m_config.allowSimultaneousMovement = isSimultaneousMode;
@@ -492,7 +493,7 @@ public:
             m_aiPlayer = nullptr;
             
             // Pass the isSpectator and spectateMatchId details directly to the NetworkPlayer!
-            m_networkPlayer = std::make_shared<kungfu::NetworkPlayer>(m_ioContext, host, port, isSpectator, spectateMatchId);
+            m_networkPlayer = std::make_shared<kungfu::NetworkPlayer>(m_ioContext, host, port, isSpectator, spectateMatchId, onlineRoomCode);
             m_networkPlayer->connectAndJoin();
             
             m_networkThread = std::thread([this]() {
@@ -538,9 +539,6 @@ public:
             else m_soundPlayer->stopSound("walk");
         }
 
-        // ====================================================
-        // Upgrade: launch dynamic, celebratory gold sparkles during victory
-        // ====================================================
         if (m_gameEngine->isGameOver()) {
             m_rematchButton->update(deltaTime);
             m_menuButton->update(deltaTime);
@@ -554,23 +552,28 @@ public:
                 if (m_isNetworkMode && m_networkPlayer) {
                     isLocalWinner = (winner.value() == m_networkPlayer->assignedColor());
                 } else if (m_isAiOpponent) {
-                    isLocalWinner = (winner.value() == kungfu::PlayerColor::White); // the local user is always white against the computer
+                    isLocalWinner = (winner.value() == kungfu::PlayerColor::White);
                 } else {
-                    isLocalWinner = true; // in local mode we always celebrate
+                    isLocalWinner = true;
                 }
 
                 if (isLocalWinner) {
-                    // Launch floating gold particles at a gentle pace above the victory card
                     if (std::rand() % 6 == 0) {
                         float px = 200.0f + (static_cast<float>(std::rand()) / RAND_MAX) * 400.0f;
                         float py = 350.0f + (static_cast<float>(std::rand()) / RAND_MAX) * 150.0f;
-                        m_particleSystem.spawnExplosion({px, py}, Color{255, 215, 0, 180}); // Festive gold sparkle
+                        m_particleSystem.spawnExplosion({px, py}, Color{255, 215, 0, 180});
                     }
                 }
             }
         }
 
         if (m_isNetworkMode && m_networkPlayer) {
+            // Pulling the room's initial board data for the viewer/re-joiner
+            if (m_networkPlayer->hasPendingSync()) {
+                std::string syncedBoard = m_networkPlayer->consumePendingSync();
+                applySyncedBoard(syncedBoard);
+            }
+
             auto results = m_networkPlayer->pollResults();
             for (const auto& res : results) {
                 if (res.status == kungfu::ActionStatus::Rejected) {
