@@ -20,6 +20,10 @@ enum class NetworkMessageType : std::uint8_t {
     REGISTER_RESPONSE,        // Server response: 0=failed, 1=success
     MATCH_TIMEOUT,            // Server announces the match was cancelled due to a matchmaking timeout
     DISCONNECT_COUNTDOWN,     // Server announces the match is about to end due to opponent inactivity
+    SPECTATE_ROOM_REQUEST,    // Client requests to spectate a specific match by ID
+    ROOM_STATE_SYNC,          // Server sends the current board layout and match status to a spectator
+    ROOM_LIST_REQUEST,        // Client requests a list of active matches
+    ROOM_LIST_RESPONSE,       // Server returns active matches (IDs + Player Usernames)
 };
 
 // Compact wire representation of a board Position.

@@ -147,6 +147,17 @@ private:
         return std::make_unique<kungfu::ClassicMinimaxStrategy>(depth);
     }
 
+    void applySyncedBoard(const std::string& boardText) {
+    auto board = kungfu::BoardParser::parse(boardText);
+    auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
+
+    // Re-create the game engine using the synchronized board snapshot
+    m_gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine, m_config, std::make_shared<kungfu::ChessPromotionRule>(), m_eventBus);
+    m_humanPlayer = std::make_shared<kungfu::HumanPlayer>(m_gameEngine);
+    m_humanPlayer->setCellSize(kungfu::InputConfig::kDefaultCellSize);
+    
+    std::cout << "[Spectator] Board successfully synchronized with live room!" << std::endl;
+}
     void resetGame() {
         std::string startBoard =
             "bR bN bB bQ bK bB bN bR\n"
@@ -457,7 +468,16 @@ protected:
     }
 
 public:
-    explicit ChessGameScreen(ScreenManager &manager, bool isSimultaneousMode, bool isAiOpponent, AiDifficulty aiDifficulty, std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>(), bool isNetworkMode = false, std::string host = "127.0.0.1", std::string port = "8080")
+    explicit ChessGameScreen(ScreenManager &manager, 
+                             bool isSimultaneousMode, 
+                             bool isAiOpponent, 
+                             AiDifficulty aiDifficulty, 
+                             std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>(), 
+                             bool isNetworkMode = false, 
+                             std::string host = "127.0.0.1", 
+                             std::string port = "8080",
+                             bool isSpectator = false,
+                             std::uint64_t spectateMatchId = 0)
         : BaseScreen(manager, "Chess Match"), m_isAiOpponent(isAiOpponent), m_aiDifficulty(aiDifficulty), m_soundPlayer(std::move(soundPlayer)), m_isNetworkMode(isNetworkMode) {
         
         m_config.allowSimultaneousMovement = isSimultaneousMode;
@@ -470,14 +490,18 @@ public:
         if (m_isNetworkMode) {
             m_isAiOpponent = false;
             m_aiPlayer = nullptr;
-            m_networkPlayer = std::make_shared<kungfu::NetworkPlayer>(m_ioContext, host, port);
+            
+            // Pass the isSpectator and spectateMatchId details directly to the NetworkPlayer!
+            m_networkPlayer = std::make_shared<kungfu::NetworkPlayer>(m_ioContext, host, port, isSpectator, spectateMatchId);
             m_networkPlayer->connectAndJoin();
+            
             m_networkThread = std::thread([this]() {
                 boost::asio::io_context::work work(m_ioContext);
                 m_ioContext.run();
             });
         }
     }
+
 
     explicit ChessGameScreen(ScreenManager &manager, bool isSimultaneousMode, bool isAiOpponent = false, std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>())
         : ChessGameScreen(manager, isSimultaneousMode, isAiOpponent, AiDifficulty::Medium, soundPlayer, false, "127.0.0.1", "8080") {}
@@ -569,41 +593,43 @@ public:
     }
 
     void handleInput(const std::vector<InputEvent> &events) override {
-        for (const auto &event : events) {
-            if (event.type == InputEvent::Type::Mouse) {
-                const auto &mouse = event.mouse;
-                m_pauseButton->handleInput(mouse);
-                m_sidebarRestartButton->handleInput(mouse);
-                m_sidebarMenuButton->handleInput(mouse);
+    for (const auto &event : events) {
+        if (event.type == InputEvent::Type::Mouse) {
+            const auto &mouse = event.mouse;
+            m_pauseButton->handleInput(mouse);
+            m_sidebarRestartButton->handleInput(mouse);
+            m_sidebarMenuButton->handleInput(mouse);
 
-                if (m_gameEngine->isGameOver()) {
-                    m_rematchButton->handleInput(mouse);
-                    m_menuButton->handleInput(mouse);
-                } else if (!m_isPaused) {
-                    if (mouse.logicalX >= m_boardStartX && mouse.logicalX < m_boardStartX + m_boardRangeX &&
-                        mouse.logicalY >= m_boardStartY && mouse.logicalY < m_boardStartY + m_boardRangeY) {
-                        
-                        int col = static_cast<int>(mouse.logicalX / 100.0f);
-                        int row = static_cast<int>((mouse.logicalY - m_boardStartY) / 100.0f);
+            if (m_gameEngine->isGameOver()) {
+                m_rematchButton->handleInput(mouse);
+                m_menuButton->handleInput(mouse);
+            } 
+            // Only process board clicks if NOT a spectator
+            else if (!m_isPaused && (!m_isNetworkMode || !m_networkPlayer || !m_networkPlayer->isSpectator())) {
+                if (mouse.logicalX >= m_boardStartX && mouse.logicalX < m_boardStartX + m_boardRangeX &&
+                    mouse.logicalY >= m_boardStartY && mouse.logicalY < m_boardStartY + m_boardRangeY) {
+                    
+                    int col = static_cast<int>(mouse.logicalX / 100.0f);
+                    int row = static_cast<int>((mouse.logicalY - m_boardStartY) / 100.0f);
 
-                        if (col >= 0 && col < 8 && row >= 0 && row < 8) {
-                            m_hoveredTile = BoardPos{row, col};
-                            if (mouse.action == MouseEvent::Action::Press && mouse.button == MouseButton::Left) {
-                                handleBoardClick(row, col);
-                            }
+                    if (col >= 0 && col < 8 && row >= 0 && row < 8) {
+                        m_hoveredTile = BoardPos{row, col};
+                        if (mouse.action == MouseEvent::Action::Press && mouse.button == MouseButton::Left) {
+                            handleBoardClick(row, col);
                         }
-                    } else {
-                        m_hoveredTile = BoardPos{-1, -1};
                     }
+                } else {
+                    m_hoveredTile = BoardPos{-1, -1};
                 }
-            } else if (event.type == InputEvent::Type::Keyboard) {
-                if (event.key.key == Key::Escape) {
-                    if (m_gameEngine->isGameOver()) m_screenManager.popScreen();
-                    else togglePause();
-                } else if (event.key.key == Key::Space) {
-                    if (!m_gameEngine->isGameOver()) togglePause();
-                }
+            }
+        } else if (event.type == InputEvent::Type::Keyboard) {
+            if (event.key.key == Key::Escape) {
+                if (m_gameEngine->isGameOver()) m_screenManager.popScreen();
+                else togglePause();
+            } else if (event.key.key == Key::Space) {
+                if (!m_gameEngine->isGameOver()) togglePause();
             }
         }
     }
+}
 };

@@ -179,4 +179,19 @@ std::shared_ptr<LiveMatch> MatchManager::startNewMatch(std::shared_ptr<NetworkSe
     return match;
 }
 
+std::vector<MatchInfo> MatchManager::getActiveMatchesList() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<MatchInfo> list;
+    list.reserve(m_matches.size());
+    
+    for (const auto& pair : m_matches) {
+        MatchInfo info;
+        info.matchId = pair.first;
+        info.whitePlayer = pair.second->whiteUsername().empty() ? "Guest" : pair.second->whiteUsername();
+        info.blackPlayer = pair.second->blackUsername().empty() ? "AI/Opponent" : pair.second->blackUsername();
+        list.push_back(info);
+    }
+    return list;
+}
+
 } // namespace kungfu

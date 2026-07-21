@@ -15,6 +15,12 @@ namespace kungfu {
 class NetworkSession;
 class LiveMatch;
 
+struct MatchInfo {
+    std::uint64_t matchId;
+    std::string whitePlayer;
+    std::string blackPlayer;
+};
+
 class MatchManager {
 public:
     struct WaitingPlayer {
@@ -46,7 +52,7 @@ public:
     std::shared_ptr<LiveMatch> getMatch(std::uint64_t matchId);
     void removeMatch(std::uint64_t matchId);
     std::shared_ptr<LiveMatch> findActiveMatchForUser(const std::string& username);
-
+    std::vector<MatchInfo> getActiveMatchesList();
 private:
     void scheduleMatchmakingTick();
     void runMatchmakingCycle();

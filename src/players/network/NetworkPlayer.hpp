@@ -21,6 +21,14 @@ namespace kungfu
 
     class NetworkPlayer : public IPlayer, public std::enable_shared_from_this<NetworkPlayer>
     {
+    public:
+        // Struct to hold serialized details of live matches running on the server
+        struct ClientMatchInfo {
+            std::uint64_t matchId;
+            std::string whitePlayer;
+            std::string blackPlayer;
+        };
+
     private:
         boost::asio::io_context &m_ioContext;
         udp::socket m_socket;
@@ -59,8 +67,20 @@ namespace kungfu
         };
         std::map<std::uint64_t, PendingMove> m_pendingMoves;
 
+        bool m_isSpectator = false;
+        std::uint64_t m_spectateMatchId = 0;
+
+        std::atomic<bool> m_hasPendingSync{false};
+        std::string m_pendingSyncBoard;
+        std::mutex m_syncMutex;
+
+        std::vector<ClientMatchInfo> m_activeRooms;
+        std::atomic<bool> m_roomsUpdated{false};
+        std::mutex m_roomsMutex;
+
     public:
-        NetworkPlayer(boost::asio::io_context &ioContext, const std::string &host, const std::string &port);
+        NetworkPlayer(boost::asio::io_context &ioContext, const std::string &host, const std::string &port,
+                      bool isSpectator = false, std::uint64_t spectateMatchId = 0);
         ~NetworkPlayer() override;
 
         void connectAndJoin();
@@ -76,9 +96,17 @@ namespace kungfu
         bool isOpponentDisconnectedWithCountdown() const { return m_isOpponentDisconnected.load(); }
         int opponentDisconnectCountdown() const { return m_disconnectCountdown.load(); }
 
+        bool isSpectator() const { return m_isSpectator; }
+        bool hasPendingSync() const { return m_hasPendingSync.load(); }
+        std::string consumePendingSync();
+
+        std::vector<ClientMatchInfo> getActiveRooms();
+        void requestActiveRooms();
+
     private:
         void doConnect();
         void sendJoinRequest();
+        void sendSpectateRequest(); 
         void startReceive();
         void processDatagram(std::size_t bytesRecvd);
         void writePacket(NetworkMessageType type, const std::vector<std::uint8_t> &payload);

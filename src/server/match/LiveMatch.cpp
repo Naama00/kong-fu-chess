@@ -2,6 +2,7 @@
 #include "LiveMatch.hpp"
 #include "../network/Serializer.hpp"
 #include "../network/NetworkSession.hpp"
+#include "engine/io/BoardPrinter.hpp"
 #include <utility>
 #include <iostream>
 
@@ -124,11 +125,8 @@ void LiveMatch::handlePlayerMoveInternal(std::shared_ptr<NetworkSession> sender,
     if (result.status == ActionStatus::Accepted) {
         auto movePayload = Serializer::serializeMovePacket(packet);
 
-        auto white = whiteSession();
-        auto black = blackSession();
-
-        if (white) white->sendPacket(NetworkMessageType::GAME_MOVE, movePayload);
-        if (black) black->sendPacket(NetworkMessageType::GAME_MOVE, movePayload);
+        // Broadcast the validated movement to both active players and all spectating users
+        broadcastToRoom(NetworkMessageType::GAME_MOVE, movePayload);
     }
 }
 
@@ -197,11 +195,7 @@ void LiveMatch::markEndedOnce() {
 }
 
 void LiveMatch::notifyGameOver() {
-    auto white = whiteSession();
-    auto black = blackSession();
-
-    if (white) white->sendPacket(NetworkMessageType::GAME_OVER, {});
-    if (black) black->sendPacket(NetworkMessageType::GAME_OVER, {});
+    broadcastToRoom(NetworkMessageType::GAME_OVER, {});
 }
 
 void LiveMatch::startReconnectCountdown() {
@@ -237,6 +231,78 @@ void LiveMatch::triggerAutoResign() {
     stopInternal();
     markEndedOnce();
     notifyGameOver();
+}
+
+void LiveMatch::addSpectator(std::shared_ptr<NetworkSession> spectator) {
+    auto self = shared_from_this();
+    // Execute within the match's strand to ensure thread-safety
+    boost::asio::post(m_strand, [self, spectator]() {
+        if (self->m_hasEnded) return;
+
+        self->m_spectators.push_back(spectator);
+        spectator->setMatchId(self->m_matchId);
+
+        std::cout << "[Room " << self->m_matchId << "] Spectator " 
+                  << spectator->username() << " joined the room." << std::endl;
+
+        // Immediately synchronize the live board state to the newly joined spectator
+        self->syncSpectatorState(spectator);
+    });
+}
+
+void LiveMatch::removeSpectator(std::shared_ptr<NetworkSession> spectator) {
+    auto self = shared_from_this();
+    boost::asio::post(m_strand, [self, spectator]() {
+        auto it = std::remove_if(self->m_spectators.begin(), self->m_spectators.end(),
+            [spectator](const std::weak_ptr<NetworkSession>& weakSpec) {
+                auto spec = weakSpec.lock();
+                return !spec || spec == spectator;
+            });
+        
+        if (it != self->m_spectators.end()) {
+            self->m_spectators.erase(it, self->m_spectators.end());
+            std::cout << "[Room " << self->m_matchId << "] Spectator " 
+                      << spectator->username() << " left the room." << std::endl;
+        }
+    });
+}
+
+void LiveMatch::broadcastToRoom(NetworkMessageType type, const std::vector<std::uint8_t>& payload) {
+    // Send to active players
+    auto white = whiteSession();
+    auto black = blackSession();
+    if (white) white->sendPacket(type, payload);
+    if (black) black->sendPacket(type, payload);
+
+    // Send to all connected spectators and clean up stale session references on the fly
+    auto it = m_spectators.begin();
+    while (it != m_spectators.end()) {
+        if (auto spec = it->lock()) {
+            spec->sendPacket(type, payload);
+            ++it;
+        } else {
+            it = m_spectators.erase(it); // Automatic cleanup of disconnected spectators
+        }
+    }
+}
+
+void LiveMatch::syncSpectatorState(std::shared_ptr<NetworkSession> spectator) {
+    // 1. Serialize the active board layout to an string using the BoardPrinter
+    auto rawBoard = std::dynamic_pointer_cast<const Board>(m_engine->getBoard());
+    if (!rawBoard) return;
+    
+    std::string boardLayout = BoardPrinter::print(*rawBoard);
+
+    // 2. Build the state synchronization packet
+    // Layout: Match ID (8 bytes) + Board string length (4 bytes) + Board characters
+    std::vector<std::uint8_t> payload;
+    Serializer::writeU64(payload, m_matchId);
+    Serializer::writeU32(payload, static_cast<std::uint32_t>(boardLayout.size()));
+    for (char c : boardLayout) {
+        payload.push_back(static_cast<std::uint8_t>(c));
+    }
+
+    spectator->sendPacket(NetworkMessageType::ROOM_STATE_SYNC, payload);
 }
 
 } // namespace kungfu

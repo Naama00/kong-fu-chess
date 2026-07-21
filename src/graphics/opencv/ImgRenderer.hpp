@@ -1,3 +1,4 @@
+// graphics/opencv/ImgRenderer.hpp
 #pragma once
 #include "ui/framework/IRenderer.hpp"
 #include "ui/framework/AssetManager.hpp"
@@ -8,6 +9,8 @@
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
+#include <cmath>
 
 class ImgTextureAsset : public IAsset
 {
@@ -28,8 +31,6 @@ private:
     Vector2D m_logicalRange{1000.0f, 1000.0f};
     AssetManager m_assetManager;
 
-    // Cache key improvement: using the Asset pointer address.
-    // This avoids allocations and string comparisons on every frame for every chess piece!
     std::unordered_map<const IAsset*, std::pair<Vector2D, Img>> m_spriteScaleCache;
 
     struct LetterboxTransform {
@@ -62,11 +63,49 @@ private:
             static_cast<int>((logicalSize.y / m_logicalRange.y) * targetSize.y));
     }
 
+    // Helper method to build physical points for a rounded rectangle in OpenCV coordinate space
+    std::vector<cv::Point> buildRoundedRectPoints(Vector2D position, Vector2D size,
+                                                  float radius, unsigned int cornerSegments = 8) const {
+        float r = std::max(0.0f, std::min({radius, size.x / 2.0f, size.y / 2.0f}));
+        if (r < 0.5f) {
+            cv::Point topLeft = toPhysical(position);
+            cv::Point bottomRight = toPhysical({position.x + size.x, position.y + size.y});
+            return {
+                topLeft,
+                {bottomRight.x, topLeft.y},
+                bottomRight,
+                {topLeft.x, bottomRight.y}
+            };
+        }
+
+        struct Corner { float cx, cy, startDeg; };
+        Corner corners[4] = {
+            {position.x + r,          position.y + r,          180.0f}, // top-left
+            {position.x + size.x - r, position.y + r,          270.0f}, // top-right
+            {position.x + size.x - r, position.y + size.y - r,   0.0f}, // bottom-right
+            {position.x + r,          position.y + size.y - r,  90.0f}  // bottom-left
+        };
+
+        std::vector<cv::Point> points;
+        points.reserve(4 * (cornerSegments + 1));
+
+        for (const auto& corner : corners) {
+            for (unsigned int i = 0; i <= cornerSegments; ++i) {
+                float angle = (corner.startDeg + 90.0f * (static_cast<float>(i) / cornerSegments)) * 3.14159265f / 180.0f;
+                Vector2D logicalPt{
+                    corner.cx + r * std::cos(angle),
+                    corner.cy + r * std::sin(angle)
+                };
+                points.push_back(toPhysical(logicalPt));
+            }
+        }
+        return points;
+    }
+
 public:
     explicit ImgRenderer(Img &screenCanvas, std::string windowName)
         : m_screenCanvas(screenCanvas), m_windowName(std::move(windowName)) {}
 
-    // Function for proactive cache cleanup when switching between screens
     void clearCache() {
         m_spriteScaleCache.clear();
     }
@@ -163,7 +202,7 @@ public:
         cv::circle(m_screenCanvas.mat(), physCenter, r, toCvScalar(color), thickness, cv::LINE_AA);
     }
 
-     void drawSector(Vector2D center, float radius, float startAngle, float endAngle, Color color, bool fill) override
+    void drawSector(Vector2D center, float radius, float startAngle, float endAngle, Color color, bool fill) override
     {
         if (!m_screenCanvas.is_loaded()) return;
 
@@ -173,7 +212,6 @@ public:
 
         int thickness = fill ? cv::FILLED : 1;
 
-        // cv::ellipse in OpenCV takes angles in degrees and draws a sector/arc smoothly
         cv::ellipse(m_screenCanvas.mat(), physCenter, cv::Size(r, r), 0.0,
                     static_cast<double>(startAngle), static_cast<double>(endAngle),
                     toCvScalar(color), thickness, cv::LINE_AA);
@@ -216,8 +254,6 @@ public:
             else
             {
                 Vector2D requestedSize{static_cast<float>(physSize.width), static_cast<float>(physSize.height)};
-                
-                // Improvement: use the object's pointer address in the cache instead of a string
                 const IAsset* cacheKey = &asset;
 
                 auto cacheIt = m_spriteScaleCache.find(cacheKey);
@@ -281,5 +317,75 @@ public:
     AssetManager &getAssetManager()
     {
         return m_assetManager;
+    }
+
+    // ==================================================================
+    // NEW OpenCV implementations of modern pure virtual IRenderer methods
+    // ==================================================================
+
+    void drawRoundedRectangle(Vector2D position, Vector2D size, float radius,
+                               Color color, bool fill) override {
+        if (!m_screenCanvas.is_loaded()) return;
+
+        auto points = buildRoundedRectPoints(position, size, radius);
+        if (points.empty()) return;
+
+        if (fill) {
+            cv::fillConvexPoly(m_screenCanvas.mat(), points.data(), static_cast<int>(points.size()), toCvScalar(color), cv::LINE_AA);
+        } else {
+            std::vector<std::vector<cv::Point>> curves = { points };
+            cv::polylines(m_screenCanvas.mat(), curves, true, toCvScalar(color), 1, cv::LINE_AA);
+        }
+    }
+
+    void drawGradientRect(Vector2D position, Vector2D size,
+                           const std::vector<GradientStop>& stops,
+                           float angleDegrees, float cornerRadius) override {
+        if (!m_screenCanvas.is_loaded() || stops.empty()) return;
+
+        // Efficient OpenCV Fallback: Draw a flat rounded rect based on the average color of the gradient stops
+        Color blendColor = stops.front().color;
+        if (stops.size() >= 2) {
+            blendColor.r = static_cast<std::uint8_t>((static_cast<int>(stops.front().color.r) + stops.back().color.r) / 2);
+            blendColor.g = static_cast<std::uint8_t>((static_cast<int>(stops.front().color.g) + stops.back().color.g) / 2);
+            blendColor.b = static_cast<std::uint8_t>((static_cast<int>(stops.front().color.b) + stops.back().color.b) / 2);
+            blendColor.a = static_cast<std::uint8_t>((static_cast<int>(stops.front().color.a) + stops.back().color.a) / 2);
+        }
+        drawRoundedRectangle(position, size, cornerRadius, blendColor, true);
+    }
+
+    void drawRectShadow(Vector2D position, Vector2D size, float cornerRadius,
+                         Color shadowColor, float blurRadius, Vector2D offset) override {
+        if (!m_screenCanvas.is_loaded()) return;
+
+        // Performant Shadow Fallback: Draw a translucent dark flat rounded rectangle slightly offset
+        Vector2D shadowPos{position.x + offset.x, position.y + offset.y};
+        Color shadowTint = shadowColor;
+        shadowTint.a = static_cast<std::uint8_t>(shadowColor.a * 0.42f); // Apply safe alpha transparency
+        drawRoundedRectangle(shadowPos, size, cornerRadius, shadowTint, true);
+    }
+
+    void drawGlow(Vector2D center, Vector2D size, float cornerRadius,
+                   Color glowColor, float intensity) override {
+        if (!m_screenCanvas.is_loaded()) return;
+
+        // Glow Fallback: Draw a single larger, highly transparent rounded rectangle centered on center
+        Vector2D position{center.x - size.x / 2.0f, center.y - size.y / 2.0f};
+        Color glowTint = glowColor;
+        glowTint.a = static_cast<std::uint8_t>(glowColor.a * 0.22f * intensity);
+        drawRoundedRectangle(position, size, cornerRadius, glowTint, true);
+    }
+
+    void drawGlassPanel(Vector2D position, Vector2D size, float cornerRadius,
+                         Color tint, float blurStrength) override {
+        if (!m_screenCanvas.is_loaded()) return;
+
+        // Glassmorphism Fallback: Draw a semi-transparent panel tint and a thin light border outline
+        Color panelTint = tint;
+        panelTint.a = static_cast<std::uint8_t>(tint.a * (0.35f + 0.15f * blurStrength));
+        drawRoundedRectangle(position, size, cornerRadius, panelTint, true);
+
+        Color borderColor{255, 255, 255, static_cast<std::uint8_t>(30 + 40 * blurStrength)};
+        drawRoundedRectangle(position, size, cornerRadius, borderColor, false);
     }
 };

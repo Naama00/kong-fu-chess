@@ -213,6 +213,33 @@ int GameEngine::getScore() const noexcept {
     return PositionEvaluator::evaluateBalance(*board_, arbiter_);
 }
 
+MoveResult GameEngine::applyServerMove(const Position& from, const Position& to) noexcept {
+    if (gameOver_) {
+        return {false, "game_over"};
+    }
+    if (!board_) {
+        return {false, "internal_error"};
+    }
+    // Locate the piece (bypassing turn and rule validations because the server already authorized it)
+    auto sourcePieceOpt = board_->pieceAt(from);
+    if (!sourcePieceOpt.has_value() || !sourcePieceOpt.value()) {
+        sourcePieceOpt = arbiter_.getPieceInTransitAt(from);
+    }
+    if (!sourcePieceOpt.has_value() || !sourcePieceOpt.value()) {
+        return {false, "empty_source"};
+    }
+    auto piece = sourcePieceOpt.value();
+    // Cancel any local pending premoves for this piece as it's executing an authoritative server move
+    premoveQueue_.cancel(piece);
+    // Delegate execution directly to the Arbiter (interpolates movement and handles physics smoothly)
+    auto result = arbiter_.executeMove(piece, from, to, currentTimeMs_);
+    // Advance turn locally if the game mode is classic turn-based
+    if (result.isAccepted && !config_.allowSimultaneousMovement) {
+        advanceTurn();
+    }
+    return result;
+}
+
 std::optional<PlayerColor> GameEngine::getPieceColorAt(const Position& pos) const {
     if (!board_) {
         return std::nullopt;

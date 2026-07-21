@@ -16,13 +16,16 @@ class NetworkSession;
 
 class LiveMatch : public std::enable_shared_from_this<LiveMatch> {
 private:
-    static constexpr std::chrono::milliseconds kTickInterval{50}; // 20 ticks per second
+    static constexpr std::chrono::milliseconds kTickInterval{50};
 
     std::uint64_t m_matchId;
     std::shared_ptr<GameEngine> m_engine;
 
     std::weak_ptr<NetworkSession> m_whiteSession;
     std::weak_ptr<NetworkSession> m_blackSession;
+
+    // List of weak pointers to spectator sessions to avoid shared_ptr reference cycles
+    std::vector<std::weak_ptr<NetworkSession>> m_spectators;
 
     std::string m_whiteUsername;
     std::string m_blackUsername;
@@ -37,7 +40,7 @@ private:
     bool m_isWhiteDisconnected = false;
     bool m_isBlackDisconnected = false;
     int m_reconnectSecondsLeft = 20;
-    boost::asio::steady_timer m_reconnectTimer; 
+    boost::asio::steady_timer m_reconnectTimer;
 
     std::function<void(std::uint64_t)> m_onMatchEnded;
 
@@ -67,6 +70,9 @@ public:
     void handlePlayerDisconnect(std::shared_ptr<NetworkSession> session);
     void reconnectPlayer(std::shared_ptr<NetworkSession> newSession);
     void handlePlayerMove(std::shared_ptr<NetworkSession> sender, const NetworkMovePacket& packet);
+    
+    void addSpectator(std::shared_ptr<NetworkSession> spectator);
+    void removeSpectator(std::shared_ptr<NetworkSession> spectator);
 
 private:
     void scheduleFirstTick();
@@ -79,6 +85,8 @@ private:
     void startReconnectCountdown();
     void triggerAutoResign();
     void handlePlayerMoveInternal(std::shared_ptr<NetworkSession> sender, const NetworkMovePacket& packet);
+    void broadcastToRoom(NetworkMessageType type, const std::vector<std::uint8_t>& payload);
+    void syncSpectatorState(std::shared_ptr<NetworkSession> spectator);
 };
 
 } // namespace kungfu

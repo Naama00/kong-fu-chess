@@ -1,34 +1,51 @@
-// ui/screens/StartScreen.hpp
+// Update to ui/screens/StartScreen.hpp
 #pragma once
 #include "ui/screens/BaseScreen.hpp"
 #include "ui/framework/ISoundPlayer.hpp"
 #include "ui/screens/ChessGameScreen.hpp"
 #include "ui/framework/ScreenManager.hpp"
+#include "players/network/NetworkPlayer.hpp"
 #include <memory>
+#include <string>
+#include <vector>
+#include <thread>
+#include <boost/asio.hpp>
 
 class StartScreen : public BaseScreen
 {
 public:
     enum class GameMode { Simultaneous, Classic };
     enum class OpponentType { LocalPlayer, AI, Online };
+    enum class OnlineRole { Play, Spectate };
 
 private:
     Vector2D m_mousePos{0.0f, 0.0f};
     GameMode m_selectedMode{GameMode::Simultaneous};
     OpponentType m_selectedOpponent{OpponentType::AI};
     ChessGameScreen::AiDifficulty m_selectedDifficulty{ChessGameScreen::AiDifficulty::Medium};
+    
+    // Online/Lobby Spectator Properties
+    OnlineRole m_selectedOnlineRole{OnlineRole::Play};
+    std::uint64_t m_selectedSpectateRoomId = 0;
+    
+    // Lobby Asynchronous Client connection (for live room updates on start screen!)
+    std::shared_ptr<kungfu::NetworkPlayer> m_lobbyNetPlayer;
+    boost::asio::io_context m_lobbyIoContext;
+    std::thread m_lobbyNetThread;
+    std::vector<kungfu::NetworkPlayer::ClientMatchInfo> m_liveRooms;
+    float m_lobbyQueryTimer = 0.0f;
+
     std::shared_ptr<ISoundPlayer> m_soundPlayer;
 
-    // Geometric settings for the launcher interface
     const Vector2D m_panelPos{250.0f, 230.0f};
     const Vector2D m_panelSize{500.0f, 510.0f};
 
     const Vector2D m_btnSize{380.0f, 50.0f};
     const Vector2D m_modeBtnSize{180.0f, 45.0f};
-    const Vector2D m_opponentBtnSize{115.0f, 45.0f};    
-    const Vector2D m_difficultyBtnSize{115.0f, 45.0f};  
+    const Vector2D m_opponentBtnSize{115.0f, 45.0f};   
+    const Vector2D m_difficultyBtnSize{115.0f, 45.0f}; 
+    const Vector2D m_onlineRoleBtnSize{180.0f, 45.0f}; 
 
-    // Internal positions within the floating panel
     const Vector2D m_simulModePos{310.0f, 320.0f};
     const Vector2D m_classicModePos{510.0f, 320.0f};
 
@@ -40,8 +57,11 @@ private:
     const Vector2D m_mediumDifficultyPos{440.0f, 520.0f};
     const Vector2D m_hardDifficultyPos{570.0f, 520.0f};
 
-    const Vector2D m_playBtnPos{310.0f, 600.0f};
-    const Vector2D m_exitBtnPos{310.0f, 660.0f};
+    const Vector2D m_onlineRolePlayPos{310.0f, 520.0f};
+    const Vector2D m_onlineRoleSpecPos{510.0f, 520.0f};
+
+    const Vector2D m_playBtnPos{310.0f, 635.0f};
+    const Vector2D m_exitBtnPos{310.0f, 690.0f};
     
     void drawWelcomeMessage(IRenderer &renderer)
     {
@@ -125,6 +145,50 @@ private:
         renderer.drawText("Hard", {m_hardDifficultyPos.x + 38.0f, m_hardDifficultyPos.y + 28.0f}, 14, m_theme.bodyText);
     }
 
+    void drawOnlineRoleSelector(IRenderer &renderer)
+    {
+        if (m_selectedOpponent != OpponentType::Online) return;
+
+        renderer.drawText("Online Mode:", {310.0f, 495.0f}, 14, m_theme.bodyText);
+
+        bool playHovered = isPointInRect(m_mousePos, m_onlineRolePlayPos, m_onlineRoleBtnSize);
+        bool specHovered = isPointInRect(m_mousePos, m_onlineRoleSpecPos, m_onlineRoleBtnSize);
+
+        bool isPlayActive = (m_selectedOnlineRole == OnlineRole::Play);
+        Color playColor = isPlayActive ? m_theme.buttonHover : (playHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
+        renderer.drawRectangle(m_onlineRolePlayPos, m_onlineRoleBtnSize, playColor, true);
+        renderer.drawRectangle(m_onlineRolePlayPos, m_onlineRoleBtnSize, isPlayActive ? Color{255, 255, 255, 180} : m_theme.border, false);
+        renderer.drawText("Play Game", {m_onlineRolePlayPos.x + 45.0f, m_onlineRolePlayPos.y + 28.0f}, 14, m_theme.bodyText);
+
+        bool isSpecActive = (m_selectedOnlineRole == OnlineRole::Spectate);
+        Color specColor = isSpecActive ? m_theme.buttonHover : (specHovered ? Color{55, 58, 70, 255} : m_theme.buttonNormal);
+        renderer.drawRectangle(m_onlineRoleSpecPos, m_onlineRoleBtnSize, specColor, true);
+        renderer.drawRectangle(m_onlineRoleSpecPos, m_onlineRoleBtnSize, isSpecActive ? Color{255, 255, 255, 180} : m_theme.border, false);
+        renderer.drawText("Spectate Room", {m_onlineRoleSpecPos.x + 35.0f, m_onlineRoleSpecPos.y + 28.0f}, 14, m_theme.bodyText);
+
+        // --- NEW REAL-TIME ACTIVE ROOMS LIST (No IDs required!) ---
+        if (isSpecActive) {
+            renderer.drawText("Select Live Match to Spectate:", {310.0f, 580.0f}, 12, m_theme.bodyText);
+
+            if (m_liveRooms.empty()) {
+                renderer.drawRectangle({310.0f, 595.0f}, {380.0f, 32.0f}, {18, 19, 23, 255}, true);
+                renderer.drawRectangle({310.0f, 595.0f}, {380.0f, 32.0f}, m_theme.border, false);
+                renderer.drawText("No active matches online...", {325.0f, 615.0f}, 11, m_theme.textMuted);
+            } else {
+                // Show up to 1 live room (perfectly centered on screen)
+                const auto& room = m_liveRooms.front();
+                std::string label = "Match #" + std::to_string(room.matchId) + ": " + room.whitePlayer + " vs. " + room.blackPlayer;
+                
+                bool isRoomSelected = (m_selectedSpectateRoomId == room.matchId);
+                Color btnBg = isRoomSelected ? m_theme.buttonHover : (isPointInRect(m_mousePos, Vector2D{310.0f, 595.0f}, Vector2D{380.0f, 32.0f}) ? Color{55, 58, 70, 255} : Color{18, 19, 23, 255});
+                
+                renderer.drawRectangle({310.0f, 595.0f}, {380.0f, 32.0f}, btnBg, true);
+                renderer.drawRectangle({310.0f, 595.0f}, {380.0f, 32.0f}, isRoomSelected ? Color{255, 255, 255, 180} : m_theme.border, false);
+                renderer.drawText(label, {322.0f, 615.0f}, 10, m_theme.bodyText);
+            }
+        }
+    }
+
     void drawMenuButtons(IRenderer &renderer)
     {
         bool playHovered = isPointInRect(m_mousePos, m_playBtnPos, m_btnSize);
@@ -138,13 +202,16 @@ protected:
     void drawContent(IRenderer &renderer) override
     {
         drawWelcomeMessage(renderer);
-        
-        // Draw a central glass panel for the launcher
         drawGlassPanel(renderer, m_panelPos, m_panelSize);
-        
         drawModeSelector(renderer);
         drawOpponentSelector(renderer);
-        drawDifficultySelector(renderer);
+        
+        if (m_selectedOpponent == OpponentType::AI) {
+            drawDifficultySelector(renderer);
+        } else if (m_selectedOpponent == OpponentType::Online) {
+            drawOnlineRoleSelector(renderer);
+        }
+        
         drawMenuButtons(renderer);
     }
 
@@ -160,12 +227,57 @@ public:
         m_theme.bodyText = Color{210, 215, 225, 255};
     }
 
+    ~StartScreen() override {
+        // Safe shutdown of background lobby network context when exiting StartScreen
+        if (m_lobbyNetPlayer) {
+            m_lobbyIoContext.stop();
+            if (m_lobbyNetThread.joinable()) {
+                m_lobbyNetThread.join();
+            }
+        }
+    }
+
     void onEnter() override {}
     void onExit() override {}
 
     void update(float deltaTime) override { 
         tickBackground(deltaTime); 
-        (void)deltaTime; }
+
+        // Periodically poll active rooms from server when in Online-Spectate screen
+        if (m_selectedOpponent == OpponentType::Online && m_selectedOnlineRole == OnlineRole::Spectate) {
+            if (!m_lobbyNetPlayer) {
+                // Initialize lobby client context in background
+                m_lobbyNetPlayer = std::make_shared<kungfu::NetworkPlayer>(m_lobbyIoContext, "127.0.0.1", "8080", true, 0);
+                m_lobbyNetPlayer->connectAndJoin();
+                m_lobbyNetThread = std::thread([this]() {
+                    boost::asio::io_context::work work(m_lobbyIoContext);
+                    m_lobbyIoContext.run();
+                });
+            }
+
+            m_lobbyQueryTimer -= deltaTime;
+            if (m_lobbyQueryTimer <= 0.0f) {
+                m_lobbyQueryTimer = 1.5f; // poll every 1.5 seconds
+                if (m_lobbyNetPlayer && m_lobbyNetPlayer->isConnected()) {
+                    m_lobbyNetPlayer->requestActiveRooms();
+                }
+            }
+
+            if (m_lobbyNetPlayer && m_lobbyNetPlayer->isConnected()) {
+                m_liveRooms = m_lobbyNetPlayer->getActiveRooms();
+            }
+        } else {
+            // Disconnect lobby client if we switched to offline mode to free resources
+            if (m_lobbyNetPlayer) {
+                m_lobbyIoContext.stop();
+                if (m_lobbyNetThread.joinable()) {
+                    m_lobbyNetThread.join();
+                }
+                m_lobbyNetPlayer.reset();
+            }
+            m_liveRooms.clear();
+        }
+    }
 
     void handleInput(const std::vector<InputEvent> &events) override
     {
@@ -209,14 +321,41 @@ public:
                     {
                         m_selectedDifficulty = ChessGameScreen::AiDifficulty::Hard;
                     }
-                    else if (isPointInRect(m_mousePos, m_playBtnPos, m_btnSize))
+                    else if (m_selectedOpponent == OpponentType::Online && isPointInRect(m_mousePos, m_onlineRolePlayPos, m_onlineRoleBtnSize))
+                    {
+                        m_selectedOnlineRole = OnlineRole::Play;
+                    }
+                    else if (m_selectedOpponent == OpponentType::Online && isPointInRect(m_mousePos, m_onlineRoleSpecPos, m_onlineRoleBtnSize))
+                    {
+                        m_selectedOnlineRole = OnlineRole::Spectate;
+                    }
+                    // Handle clicking and selecting a room from the live list
+                    else if (m_selectedOpponent == OpponentType::Online && m_selectedOnlineRole == OnlineRole::Spectate &&
+                             !m_liveRooms.empty() && isPointInRect(m_mousePos, {310.0f, 595.0f}, {380.0f, 32.0f}))
+                    {
+                        m_selectedSpectateRoomId = m_liveRooms.front().matchId;
+                    }
+
+                    if (isPointInRect(m_mousePos, m_playBtnPos, m_btnSize))
                     {
                         bool isSimultaneous = (m_selectedMode == GameMode::Simultaneous);
                         bool isAiOpponent = (m_selectedOpponent == OpponentType::AI);
                         bool isNetworkMode = (m_selectedOpponent == OpponentType::Online);
+                        bool isSpectator = (isNetworkMode && m_selectedOnlineRole == OnlineRole::Spectate);
+                        
+                        std::uint64_t spectateMatchId = isSpectator ? m_selectedSpectateRoomId : 0;
 
                         m_screenManager.pushScreen(std::make_unique<ChessGameScreen>(
-                            m_screenManager, isSimultaneous, isAiOpponent, m_selectedDifficulty, m_soundPlayer, isNetworkMode));
+                            m_screenManager, 
+                            isSimultaneous, 
+                            isAiOpponent, 
+                            m_selectedDifficulty, 
+                            m_soundPlayer, 
+                            isNetworkMode,
+                            "127.0.0.1", "8080",
+                            isSpectator,
+                            spectateMatchId
+                        ));
                     }
                     else if (isPointInRect(m_mousePos, m_exitBtnPos, m_btnSize))
                     {

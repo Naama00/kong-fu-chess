@@ -97,11 +97,54 @@ void NetworkSession::processMessage(NetworkMessageType type, const std::vector<s
         if (match) {
             match->handlePlayerMove(shared_from_this(), *packet);
         }
+    } else if (type == NetworkMessageType::SPECTATE_ROOM_REQUEST) {
+        // Allows both authenticated profiles and unauthenticated guest sessions to spectate
+        std::size_t offset = 0;
+        std::uint64_t targetMatchId = 0;
+        if (Serializer::readU64(payload, offset, targetMatchId)) {
+            auto match = m_matchManager.getMatch(targetMatchId);
+            if (match) {
+                match->addSpectator(shared_from_this());
+            } else {
+                std::cerr << "[Server] User requested non-existent Match ID to spectate: " << targetMatchId << std::endl;
+            }
+        }
+    } else if (type == NetworkMessageType::ROOM_LIST_REQUEST) {
+        // Queries active matches and serializes room list for the Lobby viewer
+        auto matches = m_matchManager.getActiveMatchesList();
+        
+        std::vector<std::uint8_t> response;
+        Serializer::writeU32(response, static_cast<std::uint32_t>(matches.size()));
+        
+        for (const auto& match : matches) {
+            Serializer::writeU64(response, match.matchId);
+            
+            // Serialize white player username details
+            Serializer::writeU32(response, static_cast<std::uint32_t>(match.whitePlayer.size()));
+            for (char c : match.whitePlayer) {
+                response.push_back(static_cast<std::uint8_t>(c));
+            }
+            
+            // Serialize black player username details
+            Serializer::writeU32(response, static_cast<std::uint32_t>(match.blackPlayer.size()));
+            for (char c : match.blackPlayer) {
+                response.push_back(static_cast<std::uint8_t>(c));
+            }
+        }
+        
+        sendPacket(NetworkMessageType::ROOM_LIST_RESPONSE, response);
     }
 }
 
 void NetworkSession::handleDisconnect() {
     m_matchManager.unregisterPlayer(shared_from_this());
+    // If spectating a match, remove from spectator list
+    if (m_matchId != 0) {
+        auto match = m_matchManager.getMatch(m_matchId);
+        if (match) {
+            match->removeSpectator(shared_from_this());
+        }
+    }
 }
 
 std::chrono::steady_clock::time_point NetworkSession::lastActivity() const { return m_lastActivity; }

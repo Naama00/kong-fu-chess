@@ -13,22 +13,18 @@ class BaseScreen : public IScreen {
 protected:
     std::string m_screenTitle;
 
-    // Field names kept identical to the original UITheme so existing screens
-    // (e.g. ChessGameScreen's m_theme.buttonNormal / m_theme.border usage)
-    // keep compiling unchanged - only the source of the values changed, from
-    // hardcoded literals to the shared design system in ui/theme/Theme.hpp.
+    // Fixed UITheme properties to support both standard and muted text variants
     struct UITheme {
         Color background   = ui::theme::Palette::bgDeep;
         Color titleText    = ui::theme::Palette::goldBright; // noble gold for titles
         Color bodyText     = ui::theme::Palette::textPrimary;
+        Color textMuted    = ui::theme::Palette::textMuted;  
         Color buttonNormal = ui::theme::Palette::bgSurfaceHi;
         Color buttonHover  = ui::theme::Palette::indigo;     // modern accent on hover
         Color border       = ui::theme::Palette::border;
     } m_theme;
 
-    // Drives the slow-shifting animated background. Derived screens must
-    // call tickBackground(deltaTime) once at the top of their own update()
-    // for the background to animate.
+    // Drives the slow-shifting animated background.
     float m_backgroundTime = 0.0f;
     static constexpr float kBackgroundCycleSeconds = 14.0f;
 
@@ -44,10 +40,7 @@ protected:
                point.y >= rectPos.y && point.y <= rectPos.y + rectSize.y;
     }
 
-    // Draws a single smooth gradient (one draw call, interpolated on the GPU)
-    // that slowly cross-fades between two color "scenes" over time. Replaces
-    // the old approach of manually drawing 100 stacked 10px-tall rectangles
-    // every frame to fake a top-to-bottom gradient.
+    // Draws a single smooth gradient that slowly cross-fades between two color "scenes" over time.
     void drawGradientBackground(IRenderer& renderer) {
         Vector2D size = renderer.getTargetSize();
 
@@ -70,19 +63,13 @@ protected:
         renderer.drawGradientRect({0.0f, 0.0f}, size, blended, 120.0f, 0.0f);
     }
 
-    // Floating "card" panel with a soft shadow and frosted-glass fill, now
-    // delegating to the renderer's own shadow/glass primitives instead of
-    // hand-rolling flat, sharp-cornered rectangles.
+    // Floating "card" panel with a soft shadow and frosted-glass fill
     void drawGlassPanel(IRenderer& renderer, Vector2D pos, Vector2D size) {
         renderer.drawRectShadow(pos, size, ui::theme::Radius::lg, {0, 0, 0, 100}, 10.0f, {0.0f, 8.0f});
         renderer.drawGlassPanel(pos, size, ui::theme::Radius::lg, ui::theme::Palette::bgSurface, 0.6f);
     }
 
-    // Modern rounded button with a soft shadow, animated glow on hover, and
-    // a gradient fill that shifts between buttonNormal and buttonHover.
-    // hoverT is an eased 0..1 progress value (see ui::animation::HoverGroup)
-    // rather than a plain bool, so callers can animate the transition instead
-    // of switching instantly.
+    // Modern rounded button with a soft shadow, animated glow on hover, and gradient fill
     void drawButton(IRenderer& renderer, const std::string& text, Vector2D pos, Vector2D size, float hoverT) {
         Color base  = ui::animation::ColorBlend::lerp(m_theme.buttonNormal, m_theme.buttonHover, hoverT);
         Color sheen = ui::animation::ColorBlend::lighten(base, 0.18f);
@@ -106,10 +93,7 @@ protected:
         renderer.drawText(text, {textX, textY}, ui::theme::FontSize::md, m_theme.bodyText);
     }
 
-    // Small "chip" style toggle button, for grids of mutually-exclusive
-    // options (e.g. game mode / opponent / difficulty selectors). An active
-    // option stays lit permanently in the accent color; an inactive option
-    // only lights up while hovered (animated via hoverT).
+    // Small "chip" style toggle button
     void drawToggleButton(IRenderer& renderer, const std::string& text, Vector2D pos, Vector2D size,
                            float hoverT, bool isActive) {
         Color restColor = ui::animation::ColorBlend::lighten(m_theme.buttonNormal, 0.15f * hoverT);
@@ -129,7 +113,6 @@ protected:
     }
 
     void drawScreenDecorations(IRenderer& renderer) {
-        // Thin, subtle frame around the screen edges
         renderer.drawRectangle({5.0f, 5.0f}, {990.0f, 990.0f}, {55, 58, 70, 100}, false);
     }
 
@@ -142,7 +125,6 @@ public:
     virtual ~BaseScreen() = default;
 
     void draw(IRenderer& renderer) override {
-        // Slow-shifting animated gradient background instead of a static color
         drawGradientBackground(renderer);
 
         if (!m_screenTitle.empty()) {

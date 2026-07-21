@@ -1,12 +1,13 @@
 // players/network/NetworkPlayer.cpp
 #include "NetworkPlayer.hpp"
-#include "../../server/network/Serializer.hpp" // Updated relative include path
-#include "ClientAuth.hpp"                       // Updated to local inclusion (now located in players/network/)
+#include "../../server/network/Serializer.hpp" 
+#include "ClientAuth.hpp"                       
 #include <iostream>
 
 namespace kungfu
 {
-    NetworkPlayer::NetworkPlayer(boost::asio::io_context &ioContext, const std::string &host, const std::string &port)
+    NetworkPlayer::NetworkPlayer(boost::asio::io_context &ioContext, const std::string &host, const std::string &port,
+                                 bool isSpectator, std::uint64_t spectateMatchId)
         : m_ioContext(ioContext),
           m_socket(ioContext),
           m_strand(boost::asio::make_strand(m_socket.get_executor())),
@@ -14,7 +15,19 @@ namespace kungfu
           m_port(port),
           m_recvBuffer(kMaxPayloadSize),
           m_heartbeatTimer(ioContext),
-          m_retryTimer(ioContext) {}
+          m_retryTimer(ioContext),
+          m_isSpectator(isSpectator),
+          m_spectateMatchId(spectateMatchId)
+    {
+        m_matchId.store(0);
+        m_assignedColor.store(PlayerColor::White);
+        m_connected.store(false);
+        m_matchEnded.store(false);
+        m_opponentDisconnected.store(false);
+        m_nextRequestId.store(1);
+        m_isOpponentDisconnected.store(false);
+        m_disconnectCountdown.store(20);
+    }
 
     NetworkPlayer::~NetworkPlayer()
     {
@@ -60,14 +73,47 @@ namespace kungfu
         }
     }
 
+    // Directs connection requests between matchmaking search vs. spectate requests
     void NetworkPlayer::sendJoinRequest()
     {
         if (ClientAuth::isAuthenticated) {
             auto payload = Serializer::serializeAuthRequest(ClientAuth::username, ClientAuth::password);
             writePacket(NetworkMessageType::LOGIN_REQUEST, payload);
         } else {
-            writePacket(NetworkMessageType::JOIN_MATCH_REQUEST, {});
+            if (m_isSpectator) {
+                sendSpectateRequest();
+            } else {
+                writePacket(NetworkMessageType::JOIN_MATCH_REQUEST, {});
+            }
         }
+    }
+
+    void NetworkPlayer::sendSpectateRequest()
+    {
+        std::vector<std::uint8_t> payload;
+        Serializer::writeU64(payload, m_spectateMatchId);
+        writePacket(NetworkMessageType::SPECTATE_ROOM_REQUEST, payload);
+        std::cout << "[Client] Sent SPECTATE_ROOM_REQUEST for Match ID: " << m_spectateMatchId << std::endl;
+    }
+
+    void NetworkPlayer::requestActiveRooms()
+    {
+        if (!m_connected) return;
+        writePacket(NetworkMessageType::ROOM_LIST_REQUEST, {});
+    }
+
+    std::vector<NetworkPlayer::ClientMatchInfo> NetworkPlayer::getActiveRooms()
+    {
+        std::lock_guard<std::mutex> lock(m_roomsMutex);
+        m_roomsUpdated.store(false);
+        return m_activeRooms;
+    }
+
+    std::string NetworkPlayer::consumePendingSync()
+    {
+        std::lock_guard<std::mutex> lock(m_syncMutex);
+        m_hasPendingSync.store(false);
+        return m_pendingSyncBoard;
     }
 
     void NetworkPlayer::startReceive()
@@ -113,10 +159,75 @@ namespace kungfu
         {
             if (!payload.empty() && payload[0] == 1) {
                 std::cout << "[Client] UDP silent authentication succeeded!" << std::endl;
-                writePacket(NetworkMessageType::JOIN_MATCH_REQUEST, {});
+                if (m_isSpectator) {
+                    sendSpectateRequest();
+                } else {
+                    writePacket(NetworkMessageType::JOIN_MATCH_REQUEST, {});
+                }
             } else {
                 std::cerr << "[Client] Auth failed. Closing UDP socket." << std::endl;
                 handleDisconnect();
+            }
+            break;
+        }
+        case NetworkMessageType::ROOM_STATE_SYNC:
+        {
+            std::size_t readOffset = 0;
+            std::uint64_t matchId = 0;
+            std::uint32_t stringLen = 0;
+
+            if (Serializer::readU64(payload, readOffset, matchId) &&
+                Serializer::readU32(payload, readOffset, stringLen))
+            {
+                if (readOffset + stringLen <= payload.size()) {
+                    std::string boardStr(payload.begin() + readOffset, payload.begin() + readOffset + stringLen);
+                    m_matchId.store(matchId);
+                    
+                    std::lock_guard<std::mutex> lock(m_syncMutex);
+                    m_pendingSyncBoard = boardStr;
+                    m_hasPendingSync.store(true);
+                    std::cout << "[Client] Received ROOM_STATE_SYNC for Match ID: " << matchId << std::endl;
+                }
+            }
+            break;
+        }
+        case NetworkMessageType::ROOM_LIST_RESPONSE:
+        {
+            std::size_t readOffset = 0;
+            std::uint32_t count = 0;
+            if (Serializer::readU32(payload, readOffset, count)) {
+                std::vector<ClientMatchInfo> rooms;
+                rooms.reserve(count);
+                
+                bool parseOk = true;
+                for (std::uint32_t i = 0; i < count; ++i) {
+                    ClientMatchInfo info{};
+                    parseOk &= Serializer::readU64(payload, readOffset, info.matchId);
+                    
+                    std::uint32_t whiteLen = 0;
+                    parseOk &= Serializer::readU32(payload, readOffset, whiteLen);
+                    if (parseOk && readOffset + whiteLen <= payload.size()) {
+                        info.whitePlayer.assign(payload.begin() + readOffset, payload.begin() + readOffset + whiteLen);
+                        readOffset += whiteLen;
+                    } else { parseOk = false; }
+                    
+                    std::uint32_t blackLen = 0;
+                    parseOk &= Serializer::readU32(payload, readOffset, blackLen);
+                    if (parseOk && readOffset + blackLen <= payload.size()) {
+                        info.blackPlayer.assign(payload.begin() + readOffset, payload.begin() + readOffset + blackLen);
+                        readOffset += blackLen;
+                    } else { parseOk = false; }
+                    
+                    if (parseOk) {
+                        rooms.push_back(info);
+                    }
+                }
+                
+                if (parseOk) {
+                    std::lock_guard<std::mutex> lock(m_roomsMutex);
+                    m_activeRooms = std::move(rooms);
+                    m_roomsUpdated.store(true);
+                }
             }
             break;
         }
@@ -163,7 +274,6 @@ namespace kungfu
                     m_incomingResults.push_back(*result);
                 }
 
-                // Remove the confirmed request from pending queue
                 std::uint64_t reqId = result->requestId;
                 auto self = shared_from_this();
                 boost::asio::post(m_strand, [self, reqId]() {
@@ -208,7 +318,6 @@ namespace kungfu
 
         auto self = shared_from_this();
         boost::asio::post(m_strand, [self, packet]() {
-            // Save inside the tracking map for reliable execution check
             PendingMove pm{packet, std::chrono::steady_clock::now(), 0};
             self->m_pendingMoves[packet.requestId] = pm;
 
@@ -261,7 +370,6 @@ namespace kungfu
         auto now = std::chrono::steady_clock::now();
         for (auto& pair : m_pendingMoves) {
             auto& pm = pair.second;
-            // Retry if no server confirmation was received within 200ms
             if (now - pm.lastSent >= std::chrono::milliseconds(200)) {
                 if (pm.retries >= 5) {
                     std::cerr << "[Client] Move request " << pm.packet.requestId 

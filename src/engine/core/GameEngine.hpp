@@ -43,9 +43,9 @@ public:
     const RealTimeArbiter& getArbiter() const noexcept { return arbiter_; }
     const std::vector<MoveResult>& lastPremoveFailures() const noexcept { return premoveFailures_; }
     const PremoveQueue& getPremoveQueue() const noexcept { return premoveQueue_; }
-
     void addObserver(std::shared_ptr<IGameObserver> observer) noexcept;
     int getScore() const noexcept;
+    MoveResult applyServerMove(const Position& from, const Position& to) noexcept;
 
 private:
     void advanceTurn() noexcept;
