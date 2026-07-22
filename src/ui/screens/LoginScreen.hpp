@@ -133,21 +133,16 @@ private:
         return res;
     }
 
+    // Translates input key events into character representations (supports uppercase, lowercase, numbers, and symbols)
     char translateKeyToChar(const KeyEvent& keyEvent) const {
         int code = keyEvent.rawCode;
-        if (m_isSfml) {
-            if (code >= 0 && code <= 25) return 'a' + code;
-            if (code >= 26 && code <= 35) return '0' + (code - 26);
-            if (code == 57) return ' ';
-            return '\0';
-        } else {
-            char c = static_cast<char>(code & 0xFF);
-            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || 
-                c == ' ' || c == '.' || c == '_' || c == '-') {
-                return c;
-            }
-            return '\0';
+        if ((code >= 'a' && code <= 'z') || 
+            (code >= 'A' && code <= 'Z') || 
+            (code >= '0' && code <= '9') || 
+            code == ' ' || code == '.' || code == '_' || code == '-') {
+            return static_cast<char>(code);
         }
+        return '\0';
     }
 
     void startAuth(bool isRegister) {

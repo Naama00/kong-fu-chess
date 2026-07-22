@@ -105,6 +105,17 @@ public:
                 
                 outEvents.push_back(ie);
             }
+
+            // 5. Text entered events for proper text typing (captures Shift, Uppercase, Numbers, and Symbols)
+            if (const auto* textEntered = event->getIf<sf::Event::TextEntered>()) {
+                if (textEntered->unicode >= 32 && textEntered->unicode != 127) {
+                    InputEvent ie;
+                    ie.type = InputEvent::Type::Keyboard;
+                    ie.key.key = Key::Unknown;
+                    ie.key.rawCode = static_cast<int>(textEntered->unicode);
+                    outEvents.push_back(ie);
+                }
+            }
         }
     }
 };

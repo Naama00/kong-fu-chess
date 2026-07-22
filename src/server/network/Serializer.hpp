@@ -125,7 +125,6 @@ namespace kungfu
             offset += length;
             return true;
         }
-    };
 
         // ---- Header + payload -> full frame ready to send ----
 
@@ -238,4 +237,17 @@ namespace kungfu
                    readString(buf, offset, outPassword);
         }
 
+        // ---- MATCH_FOUND Payload Serialization ----
+        // Encodes match ID, assigned color, opponent's username, and opponent's Elo rating.
+        static std::vector<std::uint8_t> serializeMatchFound(std::uint64_t matchId, std::uint8_t color, std::string_view opponentUser, std::uint32_t opponentElo)
+        {
+            std::vector<std::uint8_t> buf;
+            writeU64(buf, matchId);
+            writeU8(buf, color);
+            writeString(buf, opponentUser);
+            writeU32(buf, opponentElo);
+            return buf;
+        }
+    };
+    
 } // namespace kungfu

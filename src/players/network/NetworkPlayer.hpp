@@ -40,6 +40,12 @@ namespace kungfu
         std::atomic<std::uint64_t> m_matchId{0};
         std::atomic<PlayerColor> m_assignedColor{PlayerColor::White};
         std::atomic<bool> m_connected{false};
+        std::atomic<bool> m_matchStarted{false};
+
+        // Opponent info stored thread-safely
+        std::string m_opponentUsername = "Waiting...";
+        std::uint32_t m_opponentRating = 1200;
+        std::mutex m_opponentInfoMutex;
 
         std::atomic<bool> m_matchEnded{false};
         std::atomic<bool> m_opponentDisconnected{false};
@@ -90,8 +96,22 @@ namespace kungfu
         void sendMoveToServer(const PlayerAction &action);
 
         bool isConnected() const { return m_connected; }
+        bool hasMatchStarted() const { return m_matchStarted.load(); }
         std::uint64_t matchId() const { return m_matchId; }
         PlayerColor assignedColor() const { return m_assignedColor; }
+        
+        std::string opponentUsername() {
+            std::lock_guard<std::mutex> lock(m_opponentInfoMutex);
+            return m_opponentUsername;
+        }
+        
+        std::uint32_t opponentRating() {
+            std::lock_guard<std::mutex> lock(m_opponentInfoMutex);
+            return m_opponentRating;
+        }
+
+        std::uint64_t onlineRoomCode() const { return m_onlineRoomCode; }
+
         bool matchEnded() const { return m_matchEnded; }
         bool opponentDisconnected() const { return m_opponentDisconnected; }
         bool isOpponentDisconnectedWithCountdown() const { return m_isOpponentDisconnected.load(); }
@@ -104,6 +124,9 @@ namespace kungfu
         std::vector<ClientMatchInfo> getActiveRooms();
         void requestActiveRooms();
 
+        // Publicly accessible for clean connection termination
+        void handleDisconnect();
+
     private:
         void doConnect();
         void sendJoinRequest();
@@ -111,7 +134,6 @@ namespace kungfu
         void startReceive();
         void processDatagram(std::size_t bytesRecvd);
         void writePacket(NetworkMessageType type, const std::vector<std::uint8_t> &payload);
-        void handleDisconnect();
         
         void startHeartbeat();
         

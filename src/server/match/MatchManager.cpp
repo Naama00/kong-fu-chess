@@ -198,20 +198,20 @@ std::shared_ptr<LiveMatch> MatchManager::startNewMatch(std::shared_ptr<NetworkSe
         m_matches[id] = match;
     }
 
-    auto buildMatchFoundPayload = [id](PlayerColor color) {
-        std::vector<std::uint8_t> payload;
-        Serializer::writeU64(payload, id);
-        Serializer::writeU8(payload, static_cast<std::uint8_t>(color));
-        return payload;
-    };
+    // Send full opponent details to each player upon match creation
+    std::string p1Name = player1->username().empty() ? "Player 1" : player1->username();
+    std::string p2Name = player2->username().empty() ? "Player 2" : player2->username();
 
-    player1->sendPacket(NetworkMessageType::MATCH_FOUND, buildMatchFoundPayload(PlayerColor::White));
-    player2->sendPacket(NetworkMessageType::MATCH_FOUND, buildMatchFoundPayload(PlayerColor::Black));
+    player1->sendPacket(NetworkMessageType::MATCH_FOUND, 
+        Serializer::serializeMatchFound(id, static_cast<std::uint8_t>(PlayerColor::White), p2Name, player2->rating()));
+        
+    player2->sendPacket(NetworkMessageType::MATCH_FOUND, 
+        Serializer::serializeMatchFound(id, static_cast<std::uint8_t>(PlayerColor::Black), p1Name, player1->rating()));
 
     match->start();
 
     std::cout << "[MatchManager] Created match " << id << " between: "
-              << player1->username() << " vs " << player2->username() << std::endl;
+              << p1Name << " vs " << p2Name << std::endl;
 
     return match;
 }

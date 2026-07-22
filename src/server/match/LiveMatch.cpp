@@ -219,9 +219,9 @@ void LiveMatch::reconnectPlayer(std::shared_ptr<NetworkSession> newSession) {
 
         const auto& username = newSession->username();
 
-        auto handleReconnect = [&](std::shared_ptr<NetworkSession>& session, bool& isDisconnected, 
+        auto handleReconnect = [&](std::weak_ptr<NetworkSession>& session, bool& isDisconnected, 
                                    PlayerColor color, const char* colorName) {
-            session = newSession;
+            session = newSession; 
             isDisconnected = false;
             newSession->setMatchId(self->m_matchId);
             newSession->setColor(color);

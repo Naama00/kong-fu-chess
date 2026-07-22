@@ -1,7 +1,8 @@
 // server/network/NetworkServer.cpp
 #include "NetworkServer.hpp"
-#include "../match/MatchManager.hpp"
 #include "NetworkSession.hpp"
+#include "../match/MatchManager.hpp"
+#include "../ServerConfig.hpp"
 #include "Serializer.hpp"
 #include <iostream>
 

@@ -18,7 +18,9 @@ public:
      * Draw the bottom information panel symmetrically and style it for both players
      */
     void draw(IRenderer& renderer,
+              const std::string& whiteName,
               int whiteScore,
+              const std::string& blackName,
               int blackScore,
               bool isGameOver,
               bool isPaused,
@@ -31,12 +33,15 @@ public:
         renderer.drawRectangle({0.0f, 905.0f}, {1000.0f, 95.0f}, bgColor, true);
         renderer.drawLine({0.0f, 905.0f}, {1000.0f, 905.0f}, borderColor, 2.0f);
 
-        // Display points symmetrically and identically for both players (same color and size)
-        renderer.drawText("WHITE Material: " + std::to_string(whiteScore) + " / 39", {40.0f, 960.0f}, 15, {220, 225, 235, 255});
-        renderer.drawText("BLACK Material: " + std::to_string(blackScore) + " / 39", {360.0f, 960.0f}, 15, {220, 225, 235, 255});
+        // Display player names and material scores symmetrically for both players
+        std::string whiteText = "WHITE (" + (whiteName.empty() ? "White" : whiteName) + "): " + std::to_string(whiteScore) + " / 39";
+        std::string blackText = "BLACK (" + (blackName.empty() ? "Black" : blackName) + "): " + std::to_string(blackScore) + " / 39";
+
+        renderer.drawText(whiteText, {30.0f, 960.0f}, 14, {220, 225, 235, 255});
+        renderer.drawText(blackText, {380.0f, 960.0f}, 14, {220, 225, 235, 255});
 
         // Display the current game status on the right
-        renderer.drawText("STATUS: ", {670.0f, 960.0f}, 13, {140, 145, 160, 255});
+        renderer.drawText("STATUS: ", {680.0f, 960.0f}, 13, {140, 145, 160, 255});
         
         if (isGameOver)
         {

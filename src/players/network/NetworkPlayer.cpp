@@ -24,6 +24,7 @@ namespace kungfu
         m_matchId.store(0);
         m_assignedColor.store(PlayerColor::White);
         m_connected.store(false);
+        m_matchStarted.store(false);
         m_matchEnded.store(false);
         m_opponentDisconnected.store(false);
         m_nextRequestId.store(1);
@@ -47,32 +48,35 @@ namespace kungfu
 
     void NetworkPlayer::doConnect()
     {
-        udp::resolver resolver(m_ioContext);
-        boost::system::error_code ec;
-        auto endpoints = resolver.resolve(m_host, m_port, ec);
-        
-        if (ec) {
-            std::cerr << "[Client] Host resolution failed: " << ec.message() << std::endl;
-            m_connected = false;
-            return;
-        }
+        auto resolver = std::make_shared<udp::resolver>(m_ioContext);
+        auto self = shared_from_this();
 
-        m_socket.open(udp::v4(), ec);
-        if (!ec) {
-            m_socket.connect(*endpoints.begin(), ec);
-        }
+        resolver->async_resolve(m_host, m_port,
+            boost::asio::bind_executor(m_strand,
+            [self, resolver](boost::system::error_code ec, udp::resolver::results_type endpoints) {
+                if (ec) {
+                    std::cerr << "[Client] Host resolution failed: " << ec.message() << std::endl;
+                    self->m_connected = false;
+                    return;
+                }
 
-        if (!ec) {
-            std::cout << "[Client] Connected to UDP game server!" << std::endl;
-            m_connected = true;
-            sendJoinRequest();
-            startReceive();
-            startHeartbeat();
-            startRetryTimer(); 
-        } else {
-            std::cerr << "[Client] UDP Connection failed: " << ec.message() << std::endl;
-            m_connected = false;
-        }
+                self->m_socket.open(udp::v4(), ec);
+                if (!ec) {
+                    self->m_socket.connect(*endpoints.begin(), ec);
+                }
+
+                if (!ec) {
+                    std::cout << "[Client] Connected to UDP game server!" << std::endl;
+                    self->m_connected = true;
+                    self->sendJoinRequest();
+                    self->startReceive();
+                    self->startHeartbeat();
+                    self->startRetryTimer(); 
+                } else {
+                    std::cerr << "[Client] UDP Connection failed: " << ec.message() << std::endl;
+                    self->m_connected = false;
+                }
+            }));
     }
 
     void NetworkPlayer::sendJoinRequest()
@@ -197,6 +201,7 @@ namespace kungfu
                 Serializer::readString(payload, readOffset, boardStr))
             {
                 m_matchId.store(matchId);
+                m_matchStarted.store(true);
                 
                 std::lock_guard<std::mutex> lock(m_syncMutex);
                 m_pendingSyncBoard = boardStr;
@@ -246,13 +251,27 @@ namespace kungfu
             std::size_t readOffset = 0;
             std::uint64_t matchId = 0;
             std::uint8_t colorVal = 0;
+            std::string oppUser;
+            std::uint32_t oppElo = 1200;
 
             if (Serializer::readU64(payload, readOffset, matchId) &&
                 Serializer::readU8(payload, readOffset, colorVal))
             {
                 m_matchId.store(matchId);
                 m_assignedColor.store(static_cast<PlayerColor>(colorVal));
-                std::cout << "[Client] UDP Match started! ID: " << matchId << std::endl;
+
+                // Read opponent username and rating if included in payload
+                if (Serializer::readString(payload, readOffset, oppUser) &&
+                    Serializer::readU32(payload, readOffset, oppElo)) 
+                {
+                    std::lock_guard<std::mutex> lock(m_opponentInfoMutex);
+                    m_opponentUsername = oppUser;
+                    m_opponentRating = oppElo;
+                }
+
+                m_matchStarted.store(true);
+                std::cout << "[Client] UDP Match started! ID: " << matchId 
+                          << " vs Opponent: " << oppUser << " (Elo: " << oppElo << ")" << std::endl;
             }
             break;
         }
@@ -400,11 +419,12 @@ namespace kungfu
     {
         m_connected = false;
         m_matchId = 0;
+        m_matchStarted.store(false);
         m_isOpponentDisconnected.store(false);
         m_pendingMoves.clear();
 
-        // Safely cancel active timers on disconnect
         boost::system::error_code ec;
+        m_socket.close(ec);
         m_heartbeatTimer.cancel(ec);
         m_retryTimer.cancel(ec);
     }

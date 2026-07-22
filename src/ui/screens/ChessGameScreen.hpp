@@ -23,6 +23,7 @@
 #include "players/ai/ClassicMinimaxStrategy.hpp"
 #include "players/ai/RealTimeStrategies.hpp"
 #include "players/network/NetworkPlayer.hpp"
+#include "players/network/ClientAuth.hpp"
 #include "engine/common/PieceValues.hpp"
 #include "engine/common/BoardPresets.hpp" 
 #include <future>
@@ -55,6 +56,10 @@ private:
     std::shared_ptr<kungfu::NetworkPlayer> m_networkPlayer;
     boost::asio::io_context m_ioContext;
     std::thread m_networkThread;
+
+    float m_searchTimer = 0.0f;
+    float m_matchFoundBannerTimer = 0.0f;
+    std::unique_ptr<Button> m_cancelMatchmakingButton;
 
     bool m_isPaused = false;
     bool m_isAiOpponent = false;
@@ -92,6 +97,34 @@ private:
     HeaderView m_headerView;
     FooterView m_footerView;
     BoardView m_boardView;
+
+    // Helper method to retrieve player display name dynamically
+    std::string getPlayerName(kungfu::PlayerColor color) const {
+        if (m_isNetworkMode && m_networkPlayer) {
+            if (m_networkPlayer->isSpectator()) {
+                return (color == kungfu::PlayerColor::White) ? "White Player" : "Black Player";
+            }
+            if (m_networkPlayer->assignedColor() == color) {
+                return kungfu::ClientAuth::username.empty() ? "You" : kungfu::ClientAuth::username;
+            } else {
+                return m_networkPlayer->opponentUsername();
+            }
+        } else if (m_isAiOpponent) {
+            if (color == kungfu::PlayerColor::White) {
+                return kungfu::ClientAuth::username.empty() ? "Player 1" : kungfu::ClientAuth::username;
+            } else {
+                std::string diffStr = (m_aiDifficulty == AiDifficulty::Easy) ? "Easy" :
+                                     (m_aiDifficulty == AiDifficulty::Medium) ? "Medium" : "Hard";
+                return "AI (" + diffStr + ")";
+            }
+        } else {
+            if (color == kungfu::PlayerColor::White) {
+                return kungfu::ClientAuth::username.empty() ? "Player 1" : kungfu::ClientAuth::username;
+            } else {
+                return "Player 2";
+            }
+        }
+    }
 
     kungfu::PieceType getPieceTypeAt(const kungfu::Position& pos) const {
         if (auto p = m_gameEngine->getBoard()->pieceAt(pos)) return p.value()->type();
@@ -149,21 +182,25 @@ private:
     }
 
     void applySyncedBoard(const std::string& boardText) {
-    auto board = kungfu::BoardParser::parse(boardText);
-    auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
+        auto board = kungfu::BoardParser::parse(boardText);
+        auto ruleEngine = std::make_shared<kungfu::RuleEngine>(board);
 
-    // Re-create the game engine using the synchronized board snapshot
-    m_gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine, m_config, std::make_shared<kungfu::ChessPromotionRule>(), m_eventBus);
-    m_humanPlayer = std::make_shared<kungfu::HumanPlayer>(m_gameEngine);
-    m_humanPlayer->setCellSize(kungfu::InputConfig::kDefaultCellSize);
-    
-    std::cout << "[Spectator] Board successfully synchronized with live room!" << std::endl;
-}
+        // Re-create the game engine using the synchronized board snapshot
+        m_gameEngine = std::make_shared<kungfu::GameEngine>(board, ruleEngine, m_config, std::make_shared<kungfu::ChessPromotionRule>(), m_eventBus);
+        m_humanPlayer = std::make_shared<kungfu::HumanPlayer>(m_gameEngine);
+        m_humanPlayer->setCellSize(kungfu::InputConfig::kDefaultCellSize);
+        
+        std::cout << "[Spectator] Board successfully synchronized with live room!" << std::endl;
+    }
+
     void resetGame() {
-        auto startBoard = kungfu::BoardParser::parse(kungfu::BoardPresets::kStandardStartBoard);
+        // Ensure AI task finishes before re-creating match structures
+        if (m_aiFuture.valid()) {
+            m_aiFuture.wait();
+        }
 
         m_eventBus = std::make_shared<kungfu::EventBus>();
-        auto board = kungfu::BoardParser::parse(startBoard);
+        auto board = kungfu::BoardParser::parse(kungfu::BoardPresets::kStandardStartBoard);
         
         m_gameEngine = std::make_shared<kungfu::GameEngine>(
             board, 
@@ -214,6 +251,14 @@ private:
         m_pauseButton = std::make_unique<Button>(Vector2D{500.0f, 25.0f}, Vector2D{140.0f, 50.0f}, "Pause", [this]() { togglePause(); });
         m_pauseButton->setColors(m_theme.buttonNormal, m_theme.buttonHover, {255, 255, 255, 255});
 
+        m_cancelMatchmakingButton = std::make_unique<Button>(Vector2D{310.0f, 530.0f}, Vector2D{180.0f, 45.0f}, "Cancel Search", [this]() {
+            if (m_networkPlayer) {
+                m_networkPlayer->handleDisconnect();
+            }
+            m_screenManager.popScreen();
+        });
+        m_cancelMatchmakingButton->setColors({180, 50, 65, 255}, {210, 65, 80, 255}, {255, 255, 255, 255});
+
         m_eventBus->publish(kungfu::GameTransitionEvent{kungfu::GameTransitionType::Started, kungfu::PlayerColor::White});
     }
 
@@ -257,6 +302,51 @@ private:
     }
 
     void drawOverlays(IRenderer &renderer, const kungfu::view::GameSnapshot &snapshot) {
+        // --- 1. Matchmaking Waiting Overlay ---
+        if (m_isNetworkMode && m_networkPlayer && !m_networkPlayer->isSpectator() && !m_networkPlayer->hasMatchStarted()) {
+            renderer.drawRectangle({m_boardStartX, m_boardStartY}, {m_boardRangeX, m_boardRangeY}, {12, 13, 18, 235}, true);
+            
+            Vector2D panelPos{150.0f, 280.0f};
+            Vector2D panelSize{500.0f, 320.0f};
+
+            renderer.drawRectangle(panelPos, panelSize, {25, 28, 38, 250}, true);
+            renderer.drawRectangle(panelPos, panelSize, {48, 120, 192, 255}, false);
+
+            if (m_networkPlayer->onlineRoomCode() != 0) {
+                renderer.drawText("PRIVATE ROOM #" + std::to_string(m_networkPlayer->onlineRoomCode()), {panelPos.x + 120.0f, panelPos.y + 60.0f}, 24, {240, 200, 80, 255});
+                renderer.drawText("Waiting for opponent to enter this code...", {panelPos.x + 90.0f, panelPos.y + 110.0f}, 14, {210, 215, 225, 255});
+                renderer.drawText("Share code #" + std::to_string(m_networkPlayer->onlineRoomCode()) + " with your friend!", {panelPos.x + 110.0f, panelPos.y + 150.0f}, 13, {160, 165, 180, 255});
+            } else {
+                renderer.drawText("MATCHMAKING", {panelPos.x + 160.0f, panelPos.y + 60.0f}, 28, {240, 200, 80, 255});
+                renderer.drawText("Searching for opponent...", {panelPos.x + 150.0f, panelPos.y + 110.0f}, 15, {210, 215, 225, 255});
+                
+                // Pulsating animation effect
+                float pulse = (std::sin(m_totalTime * 4.0f) + 1.0f) * 0.5f;
+                renderer.drawCircle({panelPos.x + 250.0f, panelPos.y + 155.0f}, 15.0f + pulse * 8.0f, {48, 120, 192, static_cast<std::uint8_t>(100 + pulse * 155)}, true);
+            }
+
+            int sec = static_cast<int>(m_searchTimer);
+            std::string timeStr = "Time in Queue: " + std::to_string(sec) + "s";
+            renderer.drawText(timeStr, {panelPos.x + 175.0f, panelPos.y + 200.0f}, 14, {180, 185, 200, 255});
+
+            m_cancelMatchmakingButton->draw(renderer);
+            return;
+        }
+
+        // --- 2. Match Found Announcement Banner ---
+        if (m_matchFoundBannerTimer > 0.0f) {
+            float alphaFactor = std::min(m_matchFoundBannerTimer, 1.0f);
+            renderer.drawRectangle({100.0f, 120.0f}, {600.0f, 90.0f}, {20, 25, 35, static_cast<std::uint8_t>(alphaFactor * 240)}, true);
+            renderer.drawRectangle({100.0f, 120.0f}, {600.0f, 90.0f}, {74, 222, 128, static_cast<std::uint8_t>(alphaFactor * 255)}, false);
+            
+            std::string myColorStr = (m_networkPlayer && m_networkPlayer->assignedColor() == kungfu::PlayerColor::White) ? "WHITE" : "BLACK";
+            std::string oppInfo = m_networkPlayer ? (m_networkPlayer->opponentUsername() + " (" + std::to_string(m_networkPlayer->opponentRating()) + ")") : "Opponent";
+            
+            renderer.drawText("MATCH FOUND!", {320.0f, 150.0f}, 20, {74, 222, 128, static_cast<std::uint8_t>(alphaFactor * 255)});
+            renderer.drawText("You play as " + myColorStr + " vs " + oppInfo, {180.0f, 185.0f}, 14, {255, 255, 255, static_cast<std::uint8_t>(alphaFactor * 255)});
+        }
+
+        // --- 3. Pause Overlay ---
         if (m_pauseTransitionProgress > 0.0f && !snapshot.isGameOver) {
             renderer.drawRectangle({m_boardStartX, m_boardStartY}, {m_boardRangeX, m_boardRangeY}, {15, 15, 20, static_cast<std::uint8_t>(m_pauseTransitionProgress * 180)}, true);
             float panelY = -200.0f + 500.0f * (m_pauseTransitionProgress * m_pauseTransitionProgress * (3.0f - 2.0f * m_pauseTransitionProgress));
@@ -266,6 +356,7 @@ private:
             renderer.drawText("Press SPACE or Resume", {390.0f, panelY + 110.0f}, 14, {180, 180, 190, static_cast<std::uint8_t>(m_pauseTransitionProgress * 255)});
         }
 
+        // --- 4. Disconnection Countdown Overlay ---
         if (m_isNetworkMode && m_networkPlayer && m_networkPlayer->isOpponentDisconnectedWithCountdown()) {
             int seconds = m_networkPlayer->opponentDisconnectCountdown();
             renderer.drawRectangle({150.0f, 350.0f}, {500.0f, 150.0f}, {20, 20, 25, 230}, true);
@@ -274,9 +365,7 @@ private:
             renderer.drawText("Auto-Resign in: " + std::to_string(seconds) + " seconds", {280.0f, 450.0f}, 16, {255, 255, 255, 255});
         }
 
-        // ====================================================
-        // Draw an advanced and visually impressive feedback window for game over
-        // ====================================================
+        // --- 5. Game Over Feedback Overlay ---
         if (snapshot.isGameOver) {
             renderer.drawRectangle({m_boardStartX, m_boardStartY}, {m_boardRangeX, m_boardRangeY}, {10, 10, 15, 160}, true);
             
@@ -300,27 +389,22 @@ private:
                 neutralResultText = "IT'S A DRAW!";
             }
 
-            // The announcement panel styled in the center
             Vector2D panelPos{150.0f, 320.0f};
             Vector2D panelSize{500.0f, 320.0f};
 
-            // Bottom shadow
             renderer.drawRectangle({panelPos.x + 8.0f, panelPos.y + 8.0f}, panelSize, {0, 0, 0, 120}, true);
 
             if (drawVictoryText) {
-                // Glowing gold background for victory
                 renderer.drawRectangle(panelPos, panelSize, {30, 35, 45, 245}, true);
                 renderer.drawRectangle(panelPos, panelSize, {240, 200, 80, 255}, false);
                 renderer.drawText("VICTORY!", {panelPos.x + 130.0f, panelPos.y + 110.0f}, 52, {240, 200, 80, 255});
                 renderer.drawText("An epic real-time match!", {panelPos.x + 155.0f, panelPos.y + 160.0f}, 14, {180, 185, 200, 255});
             } else if (drawDefeatText) {
-                // Maroon background for defeat
                 renderer.drawRectangle(panelPos, panelSize, {25, 20, 25, 245}, true);
                 renderer.drawRectangle(panelPos, panelSize, {210, 60, 60, 255}, false);
                 renderer.drawText("DEFEAT", {panelPos.x + 155.0f, panelPos.y + 110.0f}, 52, {210, 60, 60, 255});
                 renderer.drawText("Defeat is a step to mastery.", {panelPos.x + 145.0f, panelPos.y + 160.0f}, 14, {160, 160, 170, 255});
             } else {
-                // Neutral metallic gray background for local play or draw
                 renderer.drawRectangle(panelPos, panelSize, {25, 27, 35, 245}, true);
                 renderer.drawRectangle(panelPos, panelSize, {100, 105, 120, 255}, false);
                 renderer.drawText(neutralResultText, {panelPos.x + 110.0f, panelPos.y + 110.0f}, 42, {220, 225, 235, 255});
@@ -342,6 +426,8 @@ private:
         float timeSinceLastClick = m_totalTime - m_lastClickTime;
 
         if (m_isNetworkMode && m_networkPlayer) {
+            if (!m_networkPlayer->hasMatchStarted()) return; // Block input during matchmaking search
+
             auto clickedColorOpt = m_gameEngine->getPieceColorAt({row, col});
             if (!m_humanPlayer->selectedPosition().has_value() && clickedColorOpt.has_value()) {
                 if (clickedColorOpt.value() != m_networkPlayer->assignedColor()) return;
@@ -452,11 +538,14 @@ protected:
         m_headerView.draw(renderer, "KUNG-FU CHESS", m_theme.background, m_theme.border, m_theme.titleText, *m_pauseButton, *m_sidebarRestartButton, *m_sidebarMenuButton);
         m_sidebarView.draw(renderer, m_whiteHistory, m_blackHistory, m_theme.background, m_theme.border);
         
-        // Calculate and inject the absolute score (number of living material points out of 39) into the bottom panel
+        // Calculate and inject the absolute score into the bottom panel along with active player names
         int whiteAbsolute = calculateAbsoluteMaterialScore(snapshot, kungfu::PlayerColor::White);
         int blackAbsolute = calculateAbsoluteMaterialScore(snapshot, kungfu::PlayerColor::Black);
 
-        m_footerView.draw(renderer, whiteAbsolute, blackAbsolute, m_gameEngine->isGameOver(), m_isPaused, m_config.allowSimultaneousMovement, m_gameEngine->currentTurn(), m_theme.background, m_theme.border);
+        std::string whiteName = getPlayerName(kungfu::PlayerColor::White);
+        std::string blackName = getPlayerName(kungfu::PlayerColor::Black);
+
+        m_footerView.draw(renderer, whiteName, whiteAbsolute, blackName, blackAbsolute, m_gameEngine->isGameOver(), m_isPaused, m_config.allowSimultaneousMovement, m_gameEngine->currentTurn(), m_theme.background, m_theme.border);
         drawOverlays(renderer, snapshot);
     }
 
@@ -496,19 +585,36 @@ public:
         }
     }
 
-
     explicit ChessGameScreen(ScreenManager &manager, bool isSimultaneousMode, bool isAiOpponent = false, std::shared_ptr<ISoundPlayer> soundPlayer = std::make_shared<NullSoundPlayer>())
         : ChessGameScreen(manager, isSimultaneousMode, isAiOpponent, AiDifficulty::Medium, soundPlayer, false, "127.0.0.1", "8080") {}
 
     ~ChessGameScreen() override {
+        // Safe disconnection and socket cleanup for network mode
         if (m_isNetworkMode) {
+            if (m_networkPlayer) {
+                m_networkPlayer->handleDisconnect();
+            }
             m_ioContext.stop();
-            if (m_networkThread.joinable()) m_networkThread.join();
+            if (m_networkThread.joinable()) {
+                m_networkThread.join();
+            }
+            m_networkPlayer.reset();
+        }
+
+        // Wait for background AI computation to safely finish before cleanup
+        if (m_aiFuture.valid()) {
+            m_aiFuture.wait();
         }
     }
 
     void onEnter() override {}
-    void onExit() override {}
+
+    void onExit() override {
+        // Stop audio playback loops when exiting screen
+        if (m_soundPlayer) {
+            m_soundPlayer->stopSound("walk");
+        }
+    }
 
     void update(float deltaTime) override {
         tickBackground(deltaTime);
@@ -519,6 +625,15 @@ public:
         m_totalTime += deltaTime;
         m_pauseTransitionProgress = std::clamp(m_pauseTransitionProgress + (m_isPaused ? deltaTime * 5.0f : -deltaTime * 5.0f), 0.0f, 1.0f);
         m_particleSystem.update(deltaTime);
+
+        if (m_isNetworkMode && m_networkPlayer && !m_networkPlayer->hasMatchStarted()) {
+            m_searchTimer += deltaTime;
+            m_cancelMatchmakingButton->update(deltaTime);
+        }
+
+        if (m_matchFoundBannerTimer > 0.0f) {
+            m_matchFoundBannerTimer -= deltaTime;
+        }
 
         if (m_isPaused) {
             if (m_soundPlayer) m_soundPlayer->stopSound("walk");
@@ -561,6 +676,16 @@ public:
         }
 
         if (m_isNetworkMode && m_networkPlayer) {
+            // Check for newly established match
+            static bool wasMatchStarted = false;
+            if (!wasMatchStarted && m_networkPlayer->hasMatchStarted()) {
+                wasMatchStarted = true;
+                m_matchFoundBannerTimer = 3.5f; // Show banner for 3.5s
+                if (m_soundPlayer) {
+                    m_soundPlayer->playSound("move");
+                }
+            }
+
             // Pulling the room's initial board data for the viewer/re-joiner
             if (m_networkPlayer->hasPendingSync()) {
                 std::string syncedBoard = m_networkPlayer->consumePendingSync();
@@ -589,43 +714,49 @@ public:
     }
 
     void handleInput(const std::vector<InputEvent> &events) override {
-    for (const auto &event : events) {
-        if (event.type == InputEvent::Type::Mouse) {
-            const auto &mouse = event.mouse;
-            m_pauseButton->handleInput(mouse);
-            m_sidebarRestartButton->handleInput(mouse);
-            m_sidebarMenuButton->handleInput(mouse);
+        for (const auto &event : events) {
+            if (event.type == InputEvent::Type::Mouse) {
+                const auto &mouse = event.mouse;
 
-            if (m_gameEngine->isGameOver()) {
-                m_rematchButton->handleInput(mouse);
-                m_menuButton->handleInput(mouse);
-            } 
-            // Only process board clicks if NOT a spectator
-            else if (!m_isPaused && (!m_isNetworkMode || !m_networkPlayer || !m_networkPlayer->isSpectator())) {
-                if (mouse.logicalX >= m_boardStartX && mouse.logicalX < m_boardStartX + m_boardRangeX &&
-                    mouse.logicalY >= m_boardStartY && mouse.logicalY < m_boardStartY + m_boardRangeY) {
-                    
-                    int col = static_cast<int>(mouse.logicalX / 100.0f);
-                    int row = static_cast<int>((mouse.logicalY - m_boardStartY) / 100.0f);
-
-                    if (col >= 0 && col < 8 && row >= 0 && row < 8) {
-                        m_hoveredTile = BoardPos{row, col};
-                        if (mouse.action == MouseEvent::Action::Press && mouse.button == MouseButton::Left) {
-                            handleBoardClick(row, col);
-                        }
-                    }
-                } else {
-                    m_hoveredTile = BoardPos{-1, -1};
+                if (m_isNetworkMode && m_networkPlayer && !m_networkPlayer->isSpectator() && !m_networkPlayer->hasMatchStarted()) {
+                    m_cancelMatchmakingButton->handleInput(mouse);
+                    return;
                 }
-            }
-        } else if (event.type == InputEvent::Type::Keyboard) {
-            if (event.key.key == Key::Escape) {
-                if (m_gameEngine->isGameOver()) m_screenManager.popScreen();
-                else togglePause();
-            } else if (event.key.key == Key::Space) {
-                if (!m_gameEngine->isGameOver()) togglePause();
+
+                m_pauseButton->handleInput(mouse);
+                m_sidebarRestartButton->handleInput(mouse);
+                m_sidebarMenuButton->handleInput(mouse);
+
+                if (m_gameEngine->isGameOver()) {
+                    m_rematchButton->handleInput(mouse);
+                    m_menuButton->handleInput(mouse);
+                } 
+                // Only process board clicks if NOT a spectator
+                else if (!m_isPaused && (!m_isNetworkMode || !m_networkPlayer || !m_networkPlayer->isSpectator())) {
+                    if (mouse.logicalX >= m_boardStartX && mouse.logicalX < m_boardStartX + m_boardRangeX &&
+                        mouse.logicalY >= m_boardStartY && mouse.logicalY < m_boardStartY + m_boardRangeY) {
+                        
+                        int col = static_cast<int>(mouse.logicalX / 100.0f);
+                        int row = static_cast<int>((mouse.logicalY - m_boardStartY) / 100.0f);
+
+                        if (col >= 0 && col < 8 && row >= 0 && row < 8) {
+                            m_hoveredTile = BoardPos{row, col};
+                            if (mouse.action == MouseEvent::Action::Press && mouse.button == MouseButton::Left) {
+                                handleBoardClick(row, col);
+                            }
+                        }
+                    } else {
+                        m_hoveredTile = BoardPos{-1, -1};
+                    }
+                }
+            } else if (event.type == InputEvent::Type::Keyboard) {
+                if (event.key.key == Key::Escape) {
+                    if (m_gameEngine->isGameOver()) m_screenManager.popScreen();
+                    else togglePause();
+                } else if (event.key.key == Key::Space) {
+                    if (!m_gameEngine->isGameOver()) togglePause();
+                }
             }
         }
     }
-}
 };
